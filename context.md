@@ -126,6 +126,24 @@ worker/index.ts
 - [ ] macOS LaunchAgent 1회 검증
 - [x] `develop`·`master` 머지 및 prod 배포 (2026-11-04)
 
+### 다음 릴리스 계획
+- **1.0.4 (플러그인·안정성)**
+  - [ ] `daemon/plugin/`을 npm 패키지에 포함 (`files`)
+  - [ ] `login`/`service install` 시 `~/.config/opencode/plugins/`에 플러그인 복사 (없으면 생성, OpenCode 미설치면 건너뜀)
+  - [ ] `uninstall` 시 우리 플러그인만 제거
+  - [ ] 403 `trial_ended` 수신 시 1회 안내 + 폴링 백오프 (현재 10초마다 로그)
+  - [ ] heartbeat 응답에 `minVersion` → 구버전 경고
+- **1.1.0 (keepID 기준 접기)**
+  - 전제: OpenCode compaction은 `summary` + `metadata.keepID`를 남긴다. 다음 요청 컨텍스트 = 요약 + keepID 이후 메시지.
+  - [ ] `sessions_meta`에 `keep_message_id`, `keep_at` 추가
+  - [ ] 데몬이 compaction 시 keepID 전송, 느린 동기화에서 최신 compaction 재확인(멱등)
+  - [ ] 메시지 수신 시 경계 이전 행 거부 (재업로드 방지)
+  - [ ] 조회는 경계 이후만 (화면 즉시 정확, 삭제는 지연)
+  - [ ] 웹에서 경계 이전은 "압축됨 — 요약 보기" 블록
+  - [ ] Cloudflare Cron Trigger로 경계 이전 행 배치 삭제
+  - [ ] 기존 업로드분 처리 정책 결정 (그대로 둘지, 1회 정리할지)
+  - 주의: 현재 `readEpochRows`는 compaction 메시지 위치에서 자르지만 실제 경계는 keepID(더 앞)이다.
+
 ### 출시 후
 - [ ] Workers Builds 자동 배포 (master=production / develop=preview)
 - [ ] `NEON_API_KEY` 프로젝트 스코프 교체
