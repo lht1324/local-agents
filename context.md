@@ -101,7 +101,7 @@ worker/index.ts
 ## 데몬 배포·자동 실행
 - `login` 성공 직후 백그라운드 서비스 자동 등록(linux systemd / darwin LaunchAgent).
 - `logout`: 토큰 revoke + 서비스 중지. `uninstall`: 유닛·복사본·상태·PATH 블록 제거.
-- **macOS LaunchAgent는 코드만 있고 미검증**. Windows는 v1 미지원.
+- **macOS LaunchAgent 검증 완료** (2026-11-07): npx 설치 → launchd 등록·실행, status/heartbeat 정상. Windows는 v1 미지원.
 - Node 하한 22.13.0(`node:sqlite`). 그 미만은 안내 후 종료.
 - **npm 게시 완료**: `localagents@1.0.0` (2026-11-07). registry `latest` 확인.
   - npm 계정 2FA가 꼬여 있다: 보안 키는 등록됐지만 "2FA 미활성" 배너가 뜨고 publish가 403으로 거부된다.
@@ -126,6 +126,24 @@ worker/index.ts
 - [ ] macOS LaunchAgent 1회 검증
 - [x] `develop`·`master` 머지 및 prod 배포 (2026-11-04)
 
+### 다음 릴리스 계획
+- **1.0.4 (플러그인·안정성)**
+  - [ ] `daemon/plugin/`을 npm 패키지에 포함 (`files`)
+  - [ ] `login`/`service install` 시 `~/.config/opencode/plugins/`에 플러그인 복사 (없으면 생성, OpenCode 미설치면 건너뜀)
+  - [ ] `uninstall` 시 우리 플러그인만 제거
+  - [ ] 403 `trial_ended` 수신 시 1회 안내 + 폴링 백오프 (현재 10초마다 로그)
+  - [ ] heartbeat 응답에 `minVersion` → 구버전 경고
+- **1.1.0 (keepID 기준 접기)**
+  - 전제: OpenCode compaction은 `summary` + `metadata.keepID`를 남긴다. 다음 요청 컨텍스트 = 요약 + keepID 이후 메시지.
+  - [ ] `sessions_meta`에 `keep_message_id`, `keep_at` 추가
+  - [ ] 데몬이 compaction 시 keepID 전송, 느린 동기화에서 최신 compaction 재확인(멱등)
+  - [ ] 메시지 수신 시 경계 이전 행 거부 (재업로드 방지)
+  - [ ] 조회는 경계 이후만 (화면 즉시 정확, 삭제는 지연)
+  - [ ] 웹에서 경계 이전은 "압축됨 — 요약 보기" 블록
+  - [ ] Cloudflare Cron Trigger로 경계 이전 행 배치 삭제
+  - [ ] 기존 업로드분 처리 정책 결정 (그대로 둘지, 1회 정리할지)
+  - 주의: 현재 `readEpochRows`는 compaction 메시지 위치에서 자르지만 실제 경계는 keepID(더 앞)이다.
+
 ### 출시 후
 - [ ] Workers Builds 자동 배포 (master=production / develop=preview)
 - [ ] `NEON_API_KEY` 프로젝트 스코프 교체
@@ -139,6 +157,8 @@ worker/index.ts
 - [ ] MoR: Fungies KYC 대기
 
 ## 커밋 이력 (최근)
+- `27692d4` [Fix] [낡은 shim을 교체하지 않아 localagents 명령이 깨지던 문제]
+- `32cb358` [Fix] [npx로 실행할 때 자기 파일을 찾지 못해 서비스를 설치하지 못하던 문제]
 - `ff0784f` [Docs] [npm 배포용 README·메타데이터 정리와 --help/--version 추가]
 - `1831fad` [Fix] [법적 페이지가 후행 슬래시로 리다이렉트되던 문제]
 - `9c3609d` [Fix] [유료 구독 시 플랜이 Pro로 올라가지 않던 문제]

@@ -6,6 +6,7 @@ import { devices, subscriptions } from "../../../lib/neon/schema";
 import type { AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
 import { getBaseResponse } from "../../utils/getBaseResponse";
+import { MIN_DAEMON_VERSION } from "../../../lib/version";
 
 const heartbeat = new Hono<{ Bindings: AppEnv; Variables: DeviceVariables }>();
 
@@ -50,7 +51,7 @@ heartbeat.post("/", async (c) => {
         .where(eq(subscriptions.userId, userId))
         .limit(1);
     const intervalSec = sub[0]?.interval ?? planOf(sub[0]?.plan ?? DEFAULT_PLAN_ID).syncIntervalSec;
-    return getBaseResponse({ success: true, status: 200, data: { intervalSec } });
+    return getBaseResponse({ success: true, status: 200, data: { intervalSec, minVersion: MIN_DAEMON_VERSION } });
 });
 
 export default heartbeat;
