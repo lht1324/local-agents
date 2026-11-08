@@ -9,6 +9,8 @@ import { dirname, join } from "node:path";
 
 const UNIT = "localagents.service";
 const MAC_LABEL = "link.localagents.daemon";
+// OpenCode가 읽는 플러그인. 이 파일이 있어야 이벤트 기반 즉시 동기화가 동작한다.
+const PLUGIN_FILE = "localagents-sync.js";
 
 export interface ServiceResult {
     ok: boolean;
@@ -61,7 +63,51 @@ function copyPayload(): string {
     if (existsSync(pkg)) {
         cpSync(pkg, join(target, "package.json"));
     }
+    const plugin = join(dirname(source), "plugin");
+    if (existsSync(plugin)) {
+        rmSync(join(target, "plugin"), { recursive: true, force: true });
+        cpSync(plugin, join(target, "plugin"), { recursive: true });
+    }
     return target;
+}
+
+// OpenCode 플러그인을 사용자 설정 디렉터리에 복사한다.
+// OpenCode가 설치되어 있지 않으면(설정 디렉터리 없음) 조용히 건너뛴다.
+export function installPlugin(): ServiceResult {
+    const configDir = join(homedir(), ".config", "opencode");
+    if (!existsSync(configDir)) {
+        return { ok: true, message: "opencode not detected; plugin skipped" };
+    }
+    const destination = join(configDir, "plugins", PLUGIN_FILE);
+    const source = [join(appDir(), "plugin", PLUGIN_FILE), join(__dirname, "..", "plugin", PLUGIN_FILE)].find((p) =>
+        existsSync(p),
+    );
+    if (!source) {
+        return { ok: false, message: "plugin file not found in the installed files" };
+    }
+    const next = readFileSync(source, "utf8");
+    if (existsSync(destination) && readFileSync(destination, "utf8") === next) {
+        return { ok: true, message: "opencode plugin already installed" };
+    }
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, next);
+    return { ok: true, message: "opencode plugin installed" };
+}
+
+// 우리가 설치한 플러그인만 지운다 (다른 플러그인 보존).
+function removePlugin(): void {
+    const destination = join(homedir(), ".config", "opencode", "plugins", PLUGIN_FILE);
+    try {
+        if (!existsSync(destination)) {
+            return;
+        }
+        const content = readFileSync(destination, "utf8");
+        if (content.includes("localagents") && content.includes("spool")) {
+            rmSync(destination, { force: true });
+        }
+    } catch {
+        // 무시
+    }
 }
 
 function writeShim(): void {
@@ -199,6 +245,7 @@ export function installService(): ServiceResult {
     try {
         copyPayload();
         writeShim();
+        installPlugin();
     } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
@@ -270,6 +317,7 @@ export function uninstallService(): ServiceResult {
     } catch {
         // 무시
     }
+    removePlugin();
     removeShellPath();
     rmSync(appDir(), { recursive: true, force: true });
     return { ok: true, message: "background service and installed files removed" };

@@ -2,7 +2,7 @@
 import { apiGet, apiPost, discoverServer, type DiscoveredServer } from "./server";
 import { cloudGet } from "./cloud";
 import { hostInfo, readState, writeState, baseUrl, clearState } from "./device";
-import { installService, stopService, uninstallService } from "./service";
+import { installPlugin, installService, stopService, uninstallService } from "./service";
 import { forkAndRegister } from "./fork";
 import { ensureServer, killOwned, type ManagedServer } from "./serve";
 import { syncSessions } from "./sessions";
@@ -613,6 +613,12 @@ async function onLogin(): Promise<void> {
     } catch (err) {
         console.error(`initial sync failed: ${err instanceof Error ? err.message : err}`);
     }
+    // OpenCode 플러그인. 있으면 이벤트 기반 즉시 동기화가 동작한다.
+    // 서비스를 건너뛰어도 플러그인은 설치한다 (터미널에서 run 하는 사용자도 혜택).
+    const plugin = installPlugin();
+    if (!plugin.ok) {
+        console.log(`opencode plugin was not installed: ${plugin.message}`);
+    }
     // 백그라운드 상주 등록. 실패해도 로그인은 유효하다 (초기 sync는 이미 끝났다).
     if (process.argv.includes("--no-service")) {
         console.log("background service skipped (--no-service).");
@@ -705,6 +711,25 @@ async function onDoctor(): Promise<void> {
         console.log(line);
     }
 }
+let updateWarned = false;
+
+// "1.2.3" 형태 비교. 형식이 다르면 false(경고하지 않음).
+function isOlder(current: string, minimum: string): boolean {
+    const a = current.split(".").map((n) => Number(n));
+    const b = minimum.split(".").map((n) => Number(n));
+    if (a.some((n) => Number.isNaN(n)) || b.some((n) => Number.isNaN(n))) {
+        return false;
+    }
+    for (let i = 0; i < 3; i++) {
+        const x = a[i] ?? 0;
+        const y = b[i] ?? 0;
+        if (x !== y) {
+            return x < y;
+        }
+    }
+    return false;
+}
+
 async function onHeartbeat(quiet = false): Promise<number> {
     const state = readState();
     if (!state) {
@@ -723,8 +748,15 @@ async function onHeartbeat(quiet = false): Promise<number> {
     if (!res.ok) {
         throw new Error(`heartbeat rejected: ${res.status}`);
     }
-    const body = (await res.json()) as { data?: { intervalSec?: number } };
+    const body = (await res.json()) as { data?: { intervalSec?: number; minVersion?: string } };
     const intervalSec = body.data?.intervalSec;
+    const minVersion = body.data?.minVersion;
+    if (minVersion && isOlder(VERSION, minVersion) && !updateWarned) {
+        updateWarned = true;
+        console.log(
+            `update required: ${VERSION} is older than ${minVersion}. run: npx localagents@latest login`,
+        );
+    }
     if (!quiet) {
         console.log(`heartbeat: ${state.deviceId} (${host.label}) via api`);
     }
@@ -759,6 +791,17 @@ async function onRun(): Promise<void> {
     console.log(`run: device=${state.deviceId}`);
     let intervalSec = 1800;
     let lastSlow = 0;
+    // 구독 게이트에 막힌 상태. 403이 반복되면 안내를 한 번만 하고 폴링 간격을 늘린다.
+    let blocked = false;
+    let blockedNotice = false;
+    const isBlocked = (err: unknown): boolean => /\b403\b/.test(err instanceof Error ? err.message : String(err));
+    const noteBlocked = (): void => {
+        blocked = true;
+        if (!blockedNotice) {
+            blockedNotice = true;
+            console.log("subscription ended. syncing paused. subscribe at localagents.link");
+        }
+    };
     let owned: ManagedServer | null = null;
     try {
         owned = await ensureServer();
@@ -784,11 +827,17 @@ async function onRun(): Promise<void> {
                 await syncSessions(server);
                 await syncCatalog(server);
                 const current = await syncCurrentSessions(server);
+                blocked = false;
+                blockedNotice = false;
                 if (current.sessions > 0) {
                     console.log(`current-sessions: ${current.sessions} sessions, ${current.rows} rows`);
                 }
             } catch (err) {
-                console.error(`sync failed: ${err instanceof Error ? err.message : err}`);
+                if (isBlocked(err)) {
+                    noteBlocked();
+                } else {
+                    console.error(`sync failed: ${err instanceof Error ? err.message : err}`);
+                }
             }
             console.log(`run: slow done, next in ${intervalSec}s`);
         }
@@ -802,9 +851,14 @@ async function onRun(): Promise<void> {
         try {
             await pollCommands();
         } catch (err) {
-            console.error(`poll failed: ${err instanceof Error ? err.message : err}`);
+            if (isBlocked(err)) {
+                noteBlocked();
+            } else {
+                console.error(`poll failed: ${err instanceof Error ? err.message : err}`);
+            }
         }
-        const deadline = Date.now() + 10000;
+        // 막힌 상태에서는 요청을 줄인다 (하트비트는 유지해 온라인 표시는 계속).
+        const deadline = Date.now() + (blocked ? 60000 : 10000);
         while (!stopping && Date.now() < deadline) {
             await sleep(Math.min(1000, deadline - Date.now()));
         }
