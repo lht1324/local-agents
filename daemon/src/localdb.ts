@@ -517,6 +517,78 @@ export function readTabPackage(sessionID: string): TabPackage {
     }
 }
 
+function ensureSessionV2Parent(
+    db: SqliteDatabase,
+    pkg: TabPackage,
+    dir: string,
+    now: number,
+    fallbackTitle?: string | null,
+): boolean {
+    let columns: Set<string>;
+    try {
+        const rows = db.prepare("SELECT name FROM pragma_table_info('session_v2')").all() as { name: string }[];
+        if (rows.length === 0) {
+            return false;
+        }
+        columns = new Set(rows.map((row) => row.name));
+    } catch {
+        return false;
+    }
+
+    const existing = db.prepare("SELECT project_id FROM session_v2 WHERE id = ?").get(pkg.tabId) as
+        | { project_id: string | null }
+        | undefined;
+    if (existing) {
+        return false;
+    }
+
+    const v1 = db.prepare("SELECT project_id FROM session WHERE id = ?").get(pkg.tabId) as
+        | { project_id: string | null }
+        | undefined;
+    let projectId = v1?.project_id ?? null;
+    if (!projectId) {
+        projectId =
+            (db.prepare("SELECT id FROM project WHERE worktree = ?").get(dir) as { id: string } | undefined)?.id ??
+            (db.prepare("SELECT id FROM project LIMIT 1").get() as { id: string } | undefined)?.id ??
+            null;
+    }
+    if (!projectId) {
+        throw new Error("no project row to attach the tab to");
+    }
+
+    let sibling1: { version?: string; agent?: string | null; model?: string | null } | undefined;
+    let sibling2: { version?: string; agent?: string | null; model?: string | null } | undefined;
+    try {
+        sibling1 = db.prepare("SELECT version, agent, model FROM session LIMIT 1").get() as typeof sibling1;
+    } catch {
+        sibling1 = undefined;
+    }
+    try {
+        sibling2 = db.prepare("SELECT version, agent, model FROM session_v2 LIMIT 1").get() as typeof sibling2;
+    } catch {
+        sibling2 = undefined;
+    }
+
+    const values: Record<string, string | number | null> = {
+        id: pkg.tabId,
+        project_id: projectId,
+        slug: pkg.tabId,
+        directory: dir,
+        version: pkg.version ?? sibling1?.version ?? sibling2?.version ?? "unknown",
+        time_created: now,
+        time_updated: now,
+    };
+    if (columns.has("title")) values.title = pkg.title ?? fallbackTitle ?? pkg.tabId;
+    if (columns.has("agent")) values.agent = pkg.agent ?? sibling1?.agent ?? sibling2?.agent ?? null;
+    if (columns.has("model")) values.model = pkg.modelJson ?? sibling1?.model ?? sibling2?.model ?? null;
+
+    const keys = Object.keys(values);
+    db.prepare(`INSERT INTO session_v2 (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(
+        ...keys.map((key) => values[key]),
+    );
+    return true;
+}
+
 // 인계 적용 upsert. 탭 없으면 생성, 있으면 병합. id는 유지, 그릇은 로컬 맛보기.
 // v1(message+part) ⇄ v2(session_message) 교차는 메시지+파트 행 단위 변환이다.
 export function applyTabPackageUpsert(pkg: TabPackage, fallbackTitle?: string | null): { created: boolean; messages: number; parts: number } {
@@ -562,6 +634,10 @@ export function applyTabPackageUpsert(pkg: TabPackage, fallbackTitle?: string | 
                 pkg.tabId,
             );
         }
+        // v2 부모가 없으면 이후 session_message 삽입이 FK 위반한다.
+        // v1만 존재하고 v2가 누락된 채 pull된 실패 케이스도 이 보완으로 해소된다.
+        const v2Created = ensureSessionV2Parent(db, pkg, dir, now, fallbackTitle);
+        created = created || v2Created;
         const flavor: "v1" | "v2" = (() => {
             try {
                 const r = db.prepare("SELECT COUNT(*) AS n FROM session_message").get() as { n: number };
