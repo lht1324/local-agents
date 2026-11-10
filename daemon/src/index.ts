@@ -233,17 +233,18 @@ async function onPull(): Promise<void> {
     }
     for (const n of picked) {
         const version = tabs[n] ?? tabs[0];
-        const localEpoch = sessionExists(version.tabId) ? epochOf(version.tabId) : 0;
-        if (version.epoch < localEpoch) {
-            console.log(`Skipped ${version.title ?? version.tabId}: version is epoch ${version.epoch}, local tab is epoch ${localEpoch}.`);
-            continue;
-        }
+        // diff 모델: epoch 가드 대신 충돌 판정. 새 메시지만 적용된다.
         const dir = await resolveTabDir(version.remote ?? null, version.title ?? version.tabId);
         if (!dir) {
             console.log(`Skipped ${version.title ?? version.tabId}: no folder.`);
             continue;
         }
         const applied = await pullVersion(version);
+        if (applied.conflict) {
+            console.log(`Conflict on ${version.title ?? version.tabId}: ${applied.conflictMessage}`);
+            console.log("Resolve manually before pulling again.");
+            continue;
+        }
         try {
             setTabDirectory(version.tabId, dir);
         } catch {
@@ -768,6 +769,37 @@ function sleep(ms: number): Promise<void> {
 }
 
 // 상주 루프. heartbeat·sync·poll을 주기마다 순서대로. 1개 실패해도 계속.
+async function autoPull(server: DiscoveredServer): Promise<void> {
+    const versions = await listVersions();
+    const state = readState();
+    const mine = state?.deviceId ?? "";
+    const latest = new Map<string, (typeof versions)[number]>();
+    for (const v of versions) {
+        if (v.receivedBy === mine && sessionExists(v.tabId)) {
+            continue;
+        }
+        const cur = latest.get(v.tabId);
+        if (!cur || (v.createdAt ?? "") > (cur.createdAt ?? "")) {
+            latest.set(v.tabId, v);
+        }
+    }
+    for (const v of latest.values()) {
+        if (!sessionExists(v.tabId)) {
+            continue; // 새 탭은 수동 pull (폴더 결정 필요)
+        }
+        try {
+            const applied = await pullVersion(v);
+            if (applied.conflict) {
+                console.log(`auto-pull conflict on ${v.title ?? v.tabId}: ${applied.conflictMessage}`);
+            } else if (applied.messages > 0) {
+                console.log(`auto-pull: ${applied.title} +${applied.messages} messages`);
+            }
+        } catch (err) {
+            // 조용히 실패 (다음 주기에 재시도)
+        }
+    }
+}
+
 async function onRun(): Promise<void> {
     let stopping = false;
     const stop = () => {
@@ -831,6 +863,16 @@ async function onRun(): Promise<void> {
                 blockedNotice = false;
                 if (current.sessions > 0) {
                     console.log(`current-sessions: ${current.sessions} sessions, ${current.rows} rows`);
+                }
+                // auto-pull: 로컬에 이미 있는 탭에 대해 충돌 없는 새 메시지만 자동 적용.
+                try {
+                    await autoPull(server);
+                } catch (err) {
+                    if (isBlocked(err)) {
+                        noteBlocked();
+                    } else {
+                        console.error(`auto-pull failed: ${err instanceof Error ? err.message : err}`);
+                    }
                 }
             } catch (err) {
                 if (isBlocked(err)) {

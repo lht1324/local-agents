@@ -5,7 +5,7 @@ import { apiGet, type DiscoveredServer } from "./server";
 import { cloudGet, cloudPost } from "./cloud";
 import { baseUrl, readState } from "./device";
 import { backfillSession } from "./messages";
-import { applyTabPackageUpsert, epochOf, latestOf, readTabPackage, type TabPackage } from "./localdb";
+import { applyTabPackageUpsert, dbPath, epochOf, latestOf, readTabPackage, sessionExists, type TabPackage } from "./localdb";
 import { readPushMark, writePushMark } from "./pushstate";
 import { getBytes, putBytes } from "./storage";
 
@@ -32,8 +32,11 @@ function sha256Hex(data: string): string {
 }
 
 // 통째 스냅샷 포장. 불변 버전, 합치기 없음.
-export function packTab(sessionID: string): { bytes: Uint8Array; sha256: string; rowCount: number; baseHash: string; userMsgs: number; aiMsgs: number; remote: string | null; branch: string | null } {
-    const pkg = readTabPackage(sessionID);
+export function packTab(sessionID: string, since?: { at: number; id: string } | null): { bytes: Uint8Array; sha256: string; rowCount: number; baseHash: string; userMsgs: number; aiMsgs: number; remote: string | null; branch: string | null } | null {
+    const pkg = readTabPackage(sessionID, since ?? null);
+    if (!pkg) {
+        return null;
+    }
     const canonical = JSON.stringify(pkg);
     const baseHash = sha256Hex(
         JSON.stringify({ tabId: pkg.tabId, first: pkg.messages[0]?.id ?? null, count: pkg.messages.length }),
@@ -80,6 +83,10 @@ export async function pushTabs(server: DiscoveredServer, sessionIDs: string[]): 
         console.log(`Pushing (${i + 1}/${sessionIDs.length}) ${name}...`);
         const r = await pushOneTab(server, state.userId, sid, title, (frac) => putProgress(name, Math.round(frac * 100)));
         process.stdout.write("\n");
+        if (r.skipped) {
+            console.log(`  no new messages for ${name}.`);
+            continue;
+        }
         pushed++;
         rows += r.rows;
     }
@@ -93,9 +100,15 @@ export async function pushOneTab(
     sid: string,
     title: string | null,
     report?: (frac: number) => void,
-): Promise<{ rows: number }> {
+): Promise<{ rows: number; skipped?: boolean }> {
     const show = report ?? ((pct01: number) => putProgress(sid.slice(0, 12), Math.round(pct01 * 100)));
-    const packed = packTab(sid);
+    // push mark 이후의 메시지만 업로드한다. 없으면 전체(첫 push).
+    const mark = readPushMark(sid);
+    const since = mark ? { at: mark.at, id: mark.id } : null;
+    const packed = packTab(sid, since);
+    if (!packed) {
+        return { rows: 0, skipped: true } as { rows: number; skipped: boolean };
+    }
     const epoch = epochOf(sid);
     const { userMsgs, aiMsgs } = packed;
     const version = `${Date.now()}`;
@@ -118,9 +131,9 @@ export async function pushOneTab(
         sha256: packed.sha256,
     });
     show(1);
-    const mark = latestOf(sid);
-    if (mark) {
-        writePushMark(sid, mark.at, mark.id);
+    const newMark = latestOf(sid);
+    if (newMark) {
+        writePushMark(sid, newMark.at, newMark.id);
     }
     return { rows: packed.rowCount };
 }
@@ -145,15 +158,18 @@ export async function syncOneTab(
     await pushOneTab(server, userId, sid, title, (f) => draw(0.5 + f * 0.5));
     draw(1);
     process.stdout.write("\n");
-    const mark = latestOf(sid);
-    if (mark) {
-        writePushMark(sid, mark.at, mark.id);
+    const newMark = latestOf(sid);
+    if (newMark) {
+        writePushMark(sid, newMark.at, newMark.id);
     }
 }
 
 // dump 진단. 정준 패키지를 Storage user_id/dump에 올리고 키만 뱉는다. 포인터 없음.
 export async function dumpTab(server: DiscoveredServer, userId: string, sid: string): Promise<{ key: string; bytes: number }> {
     const packed = packTab(sid);
+    if (!packed) {
+        throw new Error("nothing to dump");
+    }
     const key = `${userId}/dump/${sid}-${Date.now()}.bin.gz`;
     const res = await fetch(`${baseUrl()}/api/daemon/handoffs/url`, {
         method: "POST",
@@ -181,18 +197,62 @@ export async function dumpTab(server: DiscoveredServer, userId: string, sid: str
     return { key, bytes: packed.bytes.length };
 }
 // pull 본체. 버전 고르기 → 받기 → upsert(없으면 생성) → 검증. 함수라 자동화도 같은 걸 부른다.
-export async function pullVersion(version: HandoffVersion): Promise<{ created: boolean; messages: number; parts: number; title: string }> {
+export async function pullVersion(version: HandoffVersion): Promise<{ created: boolean; messages: number; parts: number; title: string; conflict?: boolean; conflictMessage?: string }> {
     const name = version.title ?? version.tabId;
     putProgress(name, 10);
     const raw = await getBytes(version.storageKey);
     putProgress(name, 50);
     const pkg = unpackTab(raw, version.sha256);
     putProgress(name, 80);
+
+    // 충돌 감지: 로컬에 이미 있는 메시지인데 내용이 다르면 덮어쓰지 않는다.
+    // 메시지는 append-only이므로, 같은 ID = 같은 메시지여야 한다.
+    if (sessionExists(version.tabId)) {
+        const dbPath = (await import("./localdb.js")).dbPath();
+        if (dbPath) {
+            const { openSqlite } = await import("./sqlite.js");
+            const db = openSqlite(dbPath, { readOnly: true });
+            try {
+                const localRows = db
+                    .prepare("SELECT id, data FROM session_message WHERE session_id = ?")
+                    .all(version.tabId) as { id: string; data: string }[];
+                const localMap = new Map(localRows.map((r) => [r.id, r.data]));
+                for (const m of pkg.messages) {
+                    const local = localMap.get(m.id);
+                    if (local && local !== m.data) {
+                        putProgress(name, 100);
+                        process.stdout.write("\n");
+                        return {
+                            created: false,
+                            messages: 0,
+                            parts: 0,
+                            title: pkg.title ?? version.title ?? version.tabId,
+                            conflict: true,
+                            conflictMessage: `message ${m.id} differs between this PC and the remote version`,
+                        };
+                    }
+                }
+            } finally {
+                db.close();
+            }
+        }
+    }
+
     const applied = applyTabPackageUpsert(pkg, version.title);
+
+    // pull 받은 메시지가 더 최신이면 push mark를 전진시켜 재전송을 막는다.
+    const mark = latestOf(version.tabId);
+    if (mark) {
+        const cur = readPushMark(version.tabId);
+        if (!cur || mark.at > cur.at || (mark.at === cur.at && mark.id > cur.id)) {
+            writePushMark(version.tabId, mark.at, mark.id);
+        }
+    }
+
     await cloudPost("/api/daemon/handoffs", { receivedVersion: version.version });
     putProgress(name, 100);
     process.stdout.write("\n");
-    return { ...applied, title: pkg.title ?? version.title ?? version.tabId };
+    return { ...applied, title: pkg.title ?? version.title ?? version.tabId, conflict: false };
 }
 
 export async function listVersions(): Promise<HandoffVersion[]> {

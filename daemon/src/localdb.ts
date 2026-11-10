@@ -6,7 +6,7 @@ import { openSqlite, type SqliteDatabase } from "./sqlite";
 import type { ServerMessage } from "./types";
 import { pkgFlavor, toV1, toV2, v1MessageProblems, v1PartProblems } from "./convert";
 
-function dbPath(): string | null {
+export function dbPath(): string | null {
     // 설치 방식마다 다르다. 둘 다 찔러본다 (이 Mac은 XDG 쪽에 있음).
     const candidates = [
         join(homedir(), ".local", "share", "opencode", "opencode.db"),
@@ -446,18 +446,20 @@ export function localProjectDirs(): string[] {
     }
 }
 // v2는 session_message, v1은 message+part에서 읽는다.
-export function readTabPackage(sessionID: string): TabPackage {
+export function readTabPackage(sessionID: string, since?: { at: number; id: string } | null): TabPackage {
     const path = dbPath();
     if (!path) {
         throw new Error("opencode db not found");
     }
     const db = openSqlite(path, { readOnly: true });
     try {
-        const meta = db.prepare("SELECT title, directory, version, agent, model FROM session WHERE id = ?").get(sessionID) as
+        const meta = (db.prepare("SELECT title, directory, version, agent, model FROM session WHERE id = ?").get(sessionID) ??
+            db.prepare("SELECT title, directory, version, agent, model FROM session_v2 WHERE id = ?").get(sessionID)) as
             | { title: string; directory: string; version: string; agent: string | null; model: string | null }
             | undefined;
         if (dbFlavor() === "v1") {
             const v1 = readTabPackageV1(db, sessionID);
+            // v1은 증분 필터를 적용하지 않는다 (전체).
             return {
                 tabId: sessionID,
                 exportedAt: Date.now(),
@@ -479,11 +481,29 @@ export function readTabPackage(sessionID: string): TabPackage {
         if (bounds.length > 0) {
             cut = bounds[0].seq;
         }
-        const messages = db
-            .prepare(
-                "SELECT id, type, seq, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? AND seq > ? ORDER BY id ASC",
-            )
-            .all(sessionID, cut) as unknown as (TabMessage & { type: string })[];
+        // compaction 이후에 push mark가 가리키는 메시지가 없으면 (새 epoch) push mark를 버린다.
+        let effectiveSince = since ?? null;
+        if (effectiveSince) {
+            const found = db
+                .prepare("SELECT id FROM session_message WHERE session_id = ? AND id = ? AND seq > ?")
+                .get(sessionID, effectiveSince.id, cut) as { id: string } | undefined;
+            if (!found) {
+                effectiveSince = null;
+            }
+        }
+        let msgQuery =
+            "SELECT id, type, seq, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? AND seq > ?";
+        const msgParams: unknown[] = [sessionID, cut];
+        if (effectiveSince) {
+            msgQuery += " AND (time_created > ? OR (time_created = ? AND id > ?))";
+            msgParams.push(effectiveSince.at, effectiveSince.at, effectiveSince.id);
+        }
+        msgQuery += " ORDER BY id ASC";
+        const messages = db.prepare(msgQuery).all(...msgParams) as unknown as (TabMessage & { type: string })[];
+        if (messages.length === 0) {
+            db.close();
+            return null as unknown as TabPackage;
+        }
         const v2dir = (() => {
             try {
                 const r = db.prepare("SELECT directory FROM session_v2 WHERE id = ?").get(sessionID) as
@@ -494,11 +514,15 @@ export function readTabPackage(sessionID: string): TabPackage {
                 return null;
             }
         })();
-        const parts = db
-            .prepare(
-                "SELECT p.id, p.message_id AS messageId, p.time_created AS createdAt, p.time_updated AS updatedAt, p.data FROM part p INNER JOIN session_message m ON m.id = p.message_id WHERE m.session_id = ? AND m.seq > ? ORDER BY p.id ASC",
-            )
-            .all(sessionID, cut) as unknown as TabPart[];
+        const msgIds = messages.map((m) => m.id);
+        const parts =
+            msgIds.length === 0
+                ? []
+                : (db
+                      .prepare(
+                          `SELECT p.id, p.message_id AS messageId, p.time_created AS createdAt, p.time_updated AS updatedAt, p.data FROM part p WHERE p.message_id IN (${msgIds.map(() => "?").join(",")})`,
+                      )
+                      .all(...msgIds) as unknown as TabPart[]);
         return {
             tabId: sessionID,
             exportedAt: Date.now(),
