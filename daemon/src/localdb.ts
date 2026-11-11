@@ -501,7 +501,6 @@ export function readTabPackage(sessionID: string, since?: { at: number; id: stri
         msgQuery += " ORDER BY id ASC";
         const messages = db.prepare(msgQuery).all(...msgParams) as unknown as (TabMessage & { type: string })[];
         if (messages.length === 0) {
-            db.close();
             return null as unknown as TabPackage;
         }
         const v2dir = (() => {

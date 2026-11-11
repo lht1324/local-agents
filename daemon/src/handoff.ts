@@ -105,10 +105,17 @@ export async function pushOneTab(
     // push mark 이후의 메시지만 업로드한다. 없으면 전체(첫 push).
     const mark = readPushMark(sid);
     const since = mark ? { at: mark.at, id: mark.id } : null;
+    if (mark) {
+        console.log(`  push mark: at=${mark.at} id=${mark.id}`);
+    } else {
+        console.log(`  push mark: none (first push)`);
+    }
     const packed = packTab(sid, since);
     if (!packed) {
+        console.log(`  no new messages.`);
         return { rows: 0, skipped: true } as { rows: number; skipped: boolean };
     }
+    console.log(`  uploading ${packed.rowCount} messages`);
     const epoch = epochOf(sid);
     const { userMsgs, aiMsgs } = packed;
     const version = `${Date.now()}`;
