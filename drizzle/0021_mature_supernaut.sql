@@ -1,0 +1,1 @@
+ALTER TABLE "handoffs" ALTER COLUMN "push_mark_at" SET DATA TYPE bigint;

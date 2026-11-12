@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, primaryKey, real, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, integer, pgTable, primaryKey, real, text, timestamp } from "drizzle-orm/pg-core";
 
 // 상주 데몬 1대 = 1행. 페어링 코드로 웹 계정과 연결한다.
 export const devices = pgTable("devices", {
@@ -190,7 +190,7 @@ export const handoffs = pgTable("handoffs", {
     userMsgs: integer("user_msgs").notNull().default(0),
     aiMsgs: integer("ai_msgs").notNull().default(0),
     sha256: text("sha256").notNull(),
-    pushMarkAt: integer("push_mark_at"),
+    pushMarkAt: bigint("push_mark_at", { mode: "number" }),
     pushMarkId: text("push_mark_id"),
     pushMarkSeq: integer("push_mark_seq"),
     receivedBy: text("received_by"),
