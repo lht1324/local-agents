@@ -5,6 +5,7 @@ import { join } from "node:path";
 interface PushMark {
     at: number;
     id: string;
+    seq: number;
 }
 
 function pushFile(): string {
@@ -27,9 +28,9 @@ export function readPushMark(sessionID: string): PushMark | null {
     return loadAll()[sessionID] ?? null;
 }
 
-export function writePushMark(sessionID: string, at: number, id: string): void {
+export function writePushMark(sessionID: string, at: number, id: string, seq?: number): void {
     const all = loadAll();
-    all[sessionID] = { at, id };
+    all[sessionID] = { at, id, seq: seq ?? 0 };
     try {
         mkdirSync(join(homedir(), ".config", "localagents"), { recursive: true });
         writeFileSync(pushFile(), JSON.stringify(all));

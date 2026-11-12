@@ -27,6 +27,9 @@ daemonHandoffs.get("/", async (c) => {
             userMsgs: handoffs.userMsgs,
             aiMsgs: handoffs.aiMsgs,
             sha256: handoffs.sha256,
+            pushMarkAt: handoffs.pushMarkAt,
+            pushMarkId: handoffs.pushMarkId,
+            pushMarkSeq: handoffs.pushMarkSeq,
             receivedBy: handoffs.receivedBy,
             receivedAt: handoffs.receivedAt,
             expiresAt: handoffs.expiresAt,
@@ -52,6 +55,9 @@ interface HandoffBody {
     baseHash?: unknown;
     rowCount?: unknown;
     sha256?: unknown;
+    pushMarkAt?: unknown;
+    pushMarkId?: unknown;
+    pushMarkSeq?: unknown;
     receivedVersion?: unknown;
 }
 
@@ -83,6 +89,8 @@ daemonHandoffs.post("/", async (c) => {
     }
 
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    // last-write-wins: 같은 탭의 이전 버전은 삭제
+    await db.delete(handoffs).where(and(eq(handoffs.userId, userId), eq(handoffs.tabId, body.tabId)));
     await db.insert(handoffs).values({
         id: randomUUID(),
         userId,
@@ -99,6 +107,9 @@ daemonHandoffs.post("/", async (c) => {
         userMsgs: typeof body.userMsgs === "number" ? body.userMsgs : 0,
         aiMsgs: typeof body.aiMsgs === "number" ? body.aiMsgs : 0,
         sha256: body.sha256,
+        pushMarkAt: typeof body.pushMarkAt === "number" ? body.pushMarkAt : null,
+        pushMarkId: typeof body.pushMarkId === "string" ? body.pushMarkId : null,
+        pushMarkSeq: typeof body.pushMarkSeq === "number" ? body.pushMarkSeq : null,
         expiresAt,
     });
     return getBaseResponse({ success: true, status: 201, data: { version: body.version } });

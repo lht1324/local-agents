@@ -19,6 +19,9 @@ export interface HandoffVersion {
     storageKey: string;
     baseHash: string;
     rowCount: number;
+    pushMarkAt?: number | null;
+    pushMarkId?: string | null;
+    pushMarkSeq?: number | null;
     userMsgs?: number | null;
     aiMsgs?: number | null;
     sha256: string;
@@ -123,6 +126,7 @@ export async function pushOneTab(
     show(0.3);
     await putBytes(key, packed.bytes);
     show(0.7);
+    const latestMark = latestOf(sid);
     await cloudPost("/api/daemon/handoffs", {
         tabId: sid,
         title,
@@ -136,11 +140,13 @@ export async function pushOneTab(
         baseHash: packed.baseHash,
         rowCount: packed.rowCount,
         sha256: packed.sha256,
+        pushMarkAt: latestMark?.at ?? null,
+        pushMarkId: latestMark?.id ?? null,
+        pushMarkSeq: latestMark?.seq ?? null,
     });
     show(1);
-    const newMark = latestOf(sid);
-    if (newMark) {
-        writePushMark(sid, newMark.at, newMark.id);
+    if (latestMark) {
+        writePushMark(sid, latestMark.at, latestMark.id, latestMark.seq);
     }
     return { rows: packed.rowCount };
 }
@@ -247,14 +253,11 @@ export async function pullVersion(version: HandoffVersion): Promise<{ created: b
 
     const applied = applyTabPackageUpsert(pkg, version.title);
 
-    // pull 받은 메시지가 더 최신이면 push mark를 전진시켜 재전송을 막는다.
-    const mark = latestOf(version.tabId);
-    if (mark) {
-        const cur = readPushMark(version.tabId);
-        if (!cur || mark.at > cur.at || (mark.at === cur.at && mark.id > cur.id)) {
-            writePushMark(version.tabId, mark.at, mark.id);
-        }
+    // DB에서 push mark 읽어서 로컬 push mark 설정
+    if (version.pushMarkAt && version.pushMarkId) {
+        writePushMark(version.tabId, version.pushMarkAt, version.pushMarkId, version.pushMarkSeq ?? 0);
     }
+
 
     await cloudPost("/api/daemon/handoffs", { receivedVersion: version.version });
     putProgress(name, 100);

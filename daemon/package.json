@@ -1,6 +1,6 @@
 {
     "name": "localagents",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "description": "Sync OpenCode sessions across your computers. Continue a session on another PC, or check in from your phone.",
     "bin": {
         "localagents": "dist/index.js"
