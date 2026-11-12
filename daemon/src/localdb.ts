@@ -146,7 +146,7 @@ export function countNewer(sessionID: string, createdAt: number | null, messageI
 }
 
 // 탭 최신점. push 워터마크 기록용.
-export function latestOf(sessionID: string): { at: number; id: string } | null {
+export function latestOf(sessionID: string): { at: number; id: string; seq: number } | null {
     const path = dbPath();
     if (!path) {
         return null;
@@ -154,12 +154,12 @@ export function latestOf(sessionID: string): { at: number; id: string } | null {
     const db = openSqlite(path, { readOnly: true });
     try {
         const row = db
-            .prepare("SELECT time_created AS at, id FROM session_message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1")
-            .get(sessionID) as { at: number | null; id: string } | undefined;
+            .prepare("SELECT time_created AS at, id, seq FROM session_message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1")
+            .get(sessionID) as { at: number | null; id: string; seq: number | null } | undefined;
         if (!row) {
             return null;
         }
-        return { at: row.at ?? 0, id: row.id };
+        return { at: row.at ?? 0, id: row.id, seq: row.seq ?? 0 };
     } catch {
         return null;
     } finally {
@@ -446,7 +446,7 @@ export function localProjectDirs(): string[] {
     }
 }
 // v2는 session_message, v1은 message+part에서 읽는다.
-export function readTabPackage(sessionID: string, since?: { at: number; id: string } | null): TabPackage {
+export function readTabPackage(sessionID: string, since?: { at: number; id: string; seq?: number } | null): TabPackage {
     const path = dbPath();
     if (!path) {
         throw new Error("opencode db not found");
@@ -495,8 +495,15 @@ export function readTabPackage(sessionID: string, since?: { at: number; id: stri
             "SELECT id, type, seq, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? AND seq > ?";
         const msgParams: unknown[] = [sessionID, cut];
         if (effectiveSince) {
-            msgQuery += " AND (time_created > ? OR (time_created = ? AND id > ?))";
-            msgParams.push(effectiveSince.at, effectiveSince.at, effectiveSince.id);
+            if (effectiveSince.seq && effectiveSince.seq > cut) {
+                // seq 기반: compaction 이후 단조 증가, 시계 차이에 영향 없음
+                msgQuery += " AND seq > ?";
+                msgParams.push(effectiveSince.seq);
+            } else {
+                // fallback: time_created + id
+                msgQuery += " AND (time_created > ? OR (time_created = ? AND id > ?))";
+                msgParams.push(effectiveSince.at, effectiveSince.at, effectiveSince.id);
+            }
         }
         msgQuery += " ORDER BY id ASC";
         const messages = db.prepare(msgQuery).all(...msgParams) as unknown as (TabMessage & { type: string })[];
