@@ -162,7 +162,10 @@ async function onPush(ids: string[]): Promise<void> {
             titles.push(title ?? s.id);
             let dirty = 0;
             try {
-                const mark = readPushMark(s.id);
+                // DB에서 push mark 읽기
+                const versions = await listVersions();
+                const v = versions.find((x) => x.tabId === s.id);
+                const mark = v?.pushMarkAt && v?.pushMarkId ? { at: v.pushMarkAt, id: v.pushMarkId } : null;
                 dirty = mark ? countNewer(s.id, mark.at, mark.id) : countAll(s.id);
             } catch {
                 // 0으로 표시
