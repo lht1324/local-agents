@@ -105,14 +105,28 @@ export async function pushOneTab(
     report?: (frac: number) => void,
 ): Promise<{ rows: number; skipped?: boolean }> {
     const show = report ?? ((pct01: number) => putProgress(sid.slice(0, 12), Math.round(pct01 * 100)));
-    // push mark 이후의 메시지만 업로드한다. 없으면 전체(첫 push).
-    const mark = readPushMark(sid);
-    const since = mark ? { at: mark.at, id: mark.id } : null;
-    if (mark) {
-        console.log(`  push mark: at=${mark.at} id=${mark.id}`);
-    } else {
-        console.log(`  push mark: none (first push)`);
+    // DB에서 push mark 읽기 (로컬 push.json 사용 안 함)
+    let dbPushMark: { at: number; id: string; seq: number } | null = null;
+    try {
+        const versions = await listVersions();
+        const v = versions.find((x) => x.tabId === sid);
+        if (v?.pushMarkAt && v?.pushMarkId) {
+            dbPushMark = { at: v.pushMarkAt, id: v.pushMarkId, seq: v.pushMarkSeq ?? 0 };
+            console.log(`  push mark (DB): at=${dbPushMark.at} id=${dbPushMark.id} seq=${dbPushMark.seq}`);
+        } else {
+            console.log(`  push mark (DB): none (first push)`);
+        }
+    } catch {
+        // DB 읽기 실패 시 로컬 캐시 사용
+        const local = readPushMark(sid);
+        if (local) {
+            dbPushMark = { at: local.at, id: local.id, seq: local.seq ?? 0 };
+            console.log(`  push mark (local): at=${dbPushMark.at} id=${dbPushMark.id}`);
+        } else {
+            console.log(`  push mark: none (first push)`);
+        }
     }
+    const since = dbPushMark ? { at: dbPushMark.at, id: dbPushMark.id, seq: dbPushMark.seq } : null;
     const packed = packTab(sid, since);
     if (!packed) {
         console.log(`  no new messages.`);
