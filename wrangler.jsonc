@@ -6,6 +6,12 @@
     "main": "./worker/index.ts",
     "upload_source_maps": true,
     "observability": { "enabled": true },
+    "r2_buckets": [
+        {
+            "binding": "HANDOFFS_BUCKET",
+            "bucket_name": "localagents-handoffs"
+        }
+    ],
     "assets": {
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
