@@ -35,7 +35,13 @@ app.use("*", async (c, next) => {
     await next();
 });
 // 본문 크기 상한. 동기화 행 배치가 커도 2MB면 충분하다.
-app.use("/api/*", bodyLimit());
+app.use("/api/*", async (c, next) => {
+    // 업로드 엔드포인트는 6MB+ 파일을 받으므로 제한을 높인다
+    if (c.req.path.includes("/upload")) {
+        return bodyLimit(50 * 1024 * 1024)(c, next);
+    }
+    return bodyLimit()(c, next);
+});
 
 // 인증 불필요
 app.route("/api/auth", authRoutes);
