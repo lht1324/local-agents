@@ -99,9 +99,13 @@ export function readState(): DeviceState | null {
 }
 
 export function baseUrl(): string {
-    // 기본값은 배포 도메인. 설치한 사용자는 아무 설정 없이 동작해야 한다.
-    // 개발·자체 호스팅은 LOCALAGENTS_BASE_URL로 덮어쓴다 (예: http://localhost:3004).
-    return process.env.LOCALAGENTS_BASE_URL ?? "https://localagents.link";
+    // 환경변수로 명시적 지정 가능 (자체 호스팅 등)
+    if (process.env.LOCALAGENTS_BASE_URL) {
+        return process.env.LOCALAGENTS_BASE_URL;
+    }
+    // node_modules에 있으면 npm 설치 (prod), 아니면 dev
+    const isInstalled = process.argv[1]?.includes("node_modules") ?? false;
+    return isInstalled ? "https://localagents.link" : "https://dev.localagents.link";
 }
 
 export function writeState(state: DeviceState): void {
