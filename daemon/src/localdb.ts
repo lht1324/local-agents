@@ -30,11 +30,19 @@ function toMessage(row: { id: string; type: string; createdAt: number | null; da
     const time = typeof row.createdAt === "number" ? { created: row.createdAt } : undefined;
     if (row.type === "user") {
         const meta = (d.metadata ?? {}) as Record<string, unknown>;
+        // user 본문 위치가 2가지다: 신형 metadata.displayText, 구형 최상위 text.
+        // 구형을 놓치면 본문이 빈 문자열로 업로드된다 (실DB 기준 구형이 더 많다).
+        const text =
+            typeof meta.displayText === "string"
+                ? meta.displayText
+                : typeof d.text === "string"
+                  ? d.text
+                  : "";
         return {
             id: row.id,
             type: "user",
             time,
-            text: typeof meta.displayText === "string" ? meta.displayText : "",
+            text,
             files: Array.isArray(meta.attachments) ? (meta.attachments as { name?: string; mime?: string }[]) : [],
         } as ServerMessage;
     }
@@ -338,25 +346,6 @@ export interface TabRepo {
     branch: string | null;
 }
 
-// 탭 작업폴더 + git 정체. 폴더 지정·매칭용. 전부 best-effort.
-export function tabRepoInfo(sessionID: string): TabRepo {
-    const path = dbPath();
-    if (!path) {
-        return { directory: null, remote: null, branch: null };
-    }
-    const db = openSqlite(path, { readOnly: true });
-    try {
-        const row = db.prepare("SELECT directory FROM session_v2 WHERE id = ?").get(sessionID) as
-            | { directory: string | null }
-            | undefined;
-        return repoForDirectory(row?.directory ?? null);
-    } catch {
-        return { directory: null, remote: null, branch: null };
-    } finally {
-        db.close();
-    }
-}
-
 export function repoForDirectory(directory: string | null): TabRepo {
     if (!directory) {
         return { directory: null, remote: null, branch: null };
@@ -445,8 +434,43 @@ export function localProjectDirs(): string[] {
         db.close();
     }
 }
+// OpenCode 의 내부 카운터(event_sequence)를 실제 최대 seq 에 맞춘다.
+//
+// 왜 필요한가: session_message 에 UNIQUE(session_id, seq) 가 있다.
+// OpenCode 는 다음 메시지를 쓸 때 event_sequence.seq + 1 을 seq 로 쓴다.
+// pull 로 행을 넣으면서 seq 를 재부여하면(=MAX(seq)+1 부터) event_sequence 가 뒤처진다.
+// 그러면 OpenCode 가 이미 점유된 seq 를 다시 써서 UNIQUE 위반 → 500.
+// 이 함수를 부르면 카운터가 항상 실제 max 이상이라 충돌이 없다.
+function syncEventSequence(db: SqliteDatabase, sessionID: string): void {
+    try {
+        const cols = db.prepare("SELECT name FROM pragma_table_info('event_sequence')").all() as { name: string }[];
+        const names = new Set(cols.map((c) => c.name));
+        if (!names.has("aggregate_id") || !names.has("seq")) {
+            return;
+        }
+        const maxRow = db
+            .prepare("SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM session_message WHERE session_id = ?")
+            .get(sessionID) as { maxSeq: number };
+        const maxSeq = maxRow.maxSeq;
+        if (names.has("owner_id")) {
+            db.prepare(
+                "INSERT INTO event_sequence (aggregate_id, seq, owner_id) VALUES (?, ?, NULL) ON CONFLICT(aggregate_id) DO UPDATE SET seq = MAX(event_sequence.seq, excluded.seq)",
+            ).run(sessionID, maxSeq);
+        } else {
+            db.prepare(
+                "INSERT INTO event_sequence (aggregate_id, seq) VALUES (?, ?) ON CONFLICT(aggregate_id) DO UPDATE SET seq = MAX(event_sequence.seq, excluded.seq)",
+            ).run(sessionID, maxSeq);
+        }
+    } catch {
+        // 카운터 테이블이 없으면 무시. OpenCode 가 알아서 만든다.
+    }
+}
+
 // v2는 session_message, v1은 message+part에서 읽는다.
-export function readTabPackage(sessionID: string, since?: { at: number; id: string; seq?: number } | null): TabPackage {
+export function readTabPackage(
+    sessionID: string,
+    since?: { at: number; id: string; seq?: number } | null,
+): TabPackage | null {
     const path = dbPath();
     if (!path) {
         throw new Error("opencode db not found");
@@ -508,7 +532,7 @@ export function readTabPackage(sessionID: string, since?: { at: number; id: stri
         msgQuery += " ORDER BY id ASC";
         const messages = db.prepare(msgQuery).all(...msgParams) as unknown as (TabMessage & { type: string })[];
         if (messages.length === 0) {
-            return null as unknown as TabPackage;
+            return null;
         }
         const v2dir = (() => {
             try {
@@ -766,6 +790,10 @@ export function applyTabPackageUpsert(pkg: TabPackage, fallbackTitle?: string | 
                 // 무시
             }
             throw err;
+        }
+        // pull 로 seq 를 재부여했으므로 OpenCode 의 카운터를 맞춰준다 (없으면 다음 쓰기가 500).
+        if (flavor === "v2") {
+            syncEventSequence(db, pkg.tabId);
         }
         return { created, messages, parts };
     } finally {

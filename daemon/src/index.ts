@@ -1,21 +1,28 @@
 #!/usr/bin/env node
-import { apiGet, apiPost, discoverServer, type DiscoveredServer } from "./server";
+import { apiGet, discoverServer, type DiscoveredServer } from "./server";
 import { cloudGet } from "./cloud";
 import { hostInfo, readState, writeState, baseUrl, clearState } from "./device";
 import { installPlugin, installService, stopService, uninstallService } from "./service";
 import { forkAndRegister } from "./fork";
 import { ensureServer, killOwned, type ManagedServer } from "./serve";
 import { syncSessions } from "./sessions";
-import { setSessionAgent, setSessionModel, syncCatalog, type ModelRef } from "./catalog";
+import { syncCatalog } from "./catalog";
 import { backfillMissing, syncCurrentSessions, syncMessages } from "./messages";
-import { checkboxPick, dumpTab, listVersions, pickNumbers, pullVersion, pushTabs, syncOneTab, type HandoffVersion } from "./handoff";
-import { countAll, countNewer, epochOf, findLocalDirByRemote, localRoleCounts, repoForDirectory, sessionExists, setTabDirectory } from "./localdb";
+import { checkboxPick, dumpTab, listVersions, pullVersion, pushTabs, syncOneTab } from "./handoff";
+import {
+    countAll,
+    countNewer,
+    findLocalDirByRemote,
+    localRoleCounts,
+    repoForDirectory,
+    sessionExists,
+    setTabDirectory,
+} from "./localdb";
 import { askTyped, isDir, pickDirectory } from "./sysdialog";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { readPushMark } from "./pushstate";
-import { listPending, reply, pushPending, type ReplyDecision } from "./permissions";
+import { pushPending } from "./permissions";
 import { pollCommands } from "./commands";
 
 interface SessionRow {
@@ -294,7 +301,9 @@ async function resolveTabDir(remote: string | null, label: string): Promise<stri
     const target = join(parent, name);
     console.log(`Cloning into ${target}...`);
     try {
-        execSync(`git clone "${remote}" "${target}"`, { timeout: 300000, stdio: "inherit" });
+        // remote 은 클라우드에서 오는 값이다. 셸로 넘기면 인젝션된다.
+        // 인자를 배열로 넘겨 셸 해석을 없앤다.
+        execFileSync("git", ["clone", remote, target], { timeout: 300000, stdio: "inherit" });
     } catch {
         console.log("Clone failed.");
         return null;
