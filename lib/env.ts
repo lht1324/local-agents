@@ -15,6 +15,7 @@ export interface AppEnv {
     NEON_BRANCH_ID?: string;
     INTERNAL_FIRE_AND_FORGET_API_SECRET?: string;
     ASSETS: Fetcher;
+    HANDOFFS_BUCKET: R2Bucket;
 }
 
 let bound: AppEnv | null = null;

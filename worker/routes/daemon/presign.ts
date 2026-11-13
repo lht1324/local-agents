@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { checkBillingGate } from "../../../lib/billing";
-import { requireEnv, type AppEnv } from "../../../lib/env";
+import { type AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
 import { getBaseResponse } from "../../utils/getBaseResponse";
 
