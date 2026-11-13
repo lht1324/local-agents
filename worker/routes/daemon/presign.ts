@@ -4,12 +4,10 @@ import { requireEnv, type AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
 import { getBaseResponse } from "../../utils/getBaseResponse";
 
-const BUCKET = "localagents-handoffs";
-
-// 서명 URL 발급. 데몬은 S3 키 없이 이 URL로 직행한다.
-// key는 본인 userId/ 접두사로 강제한다.
 const presign = new Hono<{ Bindings: AppEnv; Variables: DeviceVariables }>();
 
+// R2 binding을 사용한 업로드/다운로드 URL 발급.
+// presigned URL 대신 Worker가 직접 R2에 접근.
 presign.post("/", async (c) => {
     const userId = c.get("userId");
     const gate = await checkBillingGate(userId);
@@ -30,39 +28,73 @@ presign.post("/", async (c) => {
         return getBaseResponse({ success: false, status: 403, error: "key must start with your user id" });
     }
 
-    const objectKey = encodeURIComponent(body.key);
-    const url =
-        `https://console.neon.tech/api/v2/projects/${requireEnv("NEON_PROJECT_ID")}` +
-        `/branches/${requireEnv("NEON_BRANCH_ID")}/buckets/${BUCKET}/objects/${objectKey}/presign`;
-    const res = await fetch(url, {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${requireEnv("NEON_API_KEY")}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify(
-            body.operation === "upload"
-                ? { operation: "upload", content_type: "application/gzip", expires_in_seconds: 900 }
-                : { operation: "download", expires_in_seconds: 900 },
-        ),
-    });
-    if (!res.ok) {
-        const text = await res.text();
-        return getBaseResponse({ success: false, status: 502, error: `presign failed: ${res.status} ${text.slice(0, 150)}` });
+    const bucket = c.env.HANDOFFS_BUCKET;
+    if (!bucket) {
+        return getBaseResponse({ success: false, status: 500, error: "R2 bucket not configured" });
     }
-    const signed = (await res.json()) as { url?: string; method?: string; headers?: Record<string, string> };
-    if (typeof signed.url !== "string") {
-        return getBaseResponse({ success: false, status: 502, error: "presign returned no url" });
+
+    // R2 presigned URL 생성 (S3 호환)
+    // R2는 S3 호환 API를 제공하므로, Worker에서 직접 URL을 생성할 수 없음.
+    // 대신 Worker가 직접 업로드/다운로드를 처리.
+    if (body.operation === "upload") {
+        // 업로드: Worker가 직접 R2에 쓰기
+        // 데몬이 Worker에 파일을 POST하면 Worker가 R2에 저장
+        return getBaseResponse({
+            success: true,
+            status: 200,
+            data: {
+                url: `${new URL(c.req.url).origin}/api/daemon/handoffs/upload?key=${encodeURIComponent(body.key)}`,
+                method: "PUT",
+                headers: {},
+            },
+        });
+    } else {
+        // 다운로드: Worker가 R2에서 읽어서 반환
+        return getBaseResponse({
+            success: true,
+            status: 200,
+            data: {
+                url: `${new URL(c.req.url).origin}/api/daemon/handoffs/download?key=${encodeURIComponent(body.key)}`,
+                method: "GET",
+                headers: {},
+            },
+        });
     }
-    return getBaseResponse({
-        success: true,
-        status: 200,
-        data: {
-            url: signed.url,
-            method: signed.method ?? (body.operation === "upload" ? "PUT" : "GET"),
-            headers: signed.headers ?? {},
-        },
+});
+
+// 업로드 엔드포인트: 데몬이 파일을 PUT하면 Worker가 R2에 저장
+presign.put("/upload", async (c) => {
+    const userId = c.get("userId");
+    const key = c.req.query("key");
+    if (typeof key !== "string" || !key.startsWith(`${userId}/`)) {
+        return getBaseResponse({ success: false, status: 403, error: "key must start with your user id" });
+    }
+    const bucket = c.env.HANDOFFS_BUCKET;
+    if (!bucket) {
+        return getBaseResponse({ success: false, status: 500, error: "R2 bucket not configured" });
+    }
+    const body = await c.req.arrayBuffer();
+    await bucket.put(key, body, { httpMetadata: { contentType: "application/gzip" } });
+    return getBaseResponse({ success: true, status: 200, data: { key } });
+});
+
+// 다운로드 엔드포인트: Worker가 R2에서 읽어서 반환
+presign.get("/download", async (c) => {
+    const userId = c.get("userId");
+    const key = c.req.query("key");
+    if (typeof key !== "string" || !key.startsWith(`${userId}/`)) {
+        return getBaseResponse({ success: false, status: 403, error: "key must start with your user id" });
+    }
+    const bucket = c.env.HANDOFFS_BUCKET;
+    if (!bucket) {
+        return getBaseResponse({ success: false, status: 500, error: "R2 bucket not configured" });
+    }
+    const obj = await bucket.get(key);
+    if (!obj) {
+        return getBaseResponse({ success: false, status: 404, error: "not found" });
+    }
+    return new Response(obj.body, {
+        headers: { "Content-Type": "application/gzip" },
     });
 });
 

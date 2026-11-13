@@ -1,4 +1,5 @@
 import { cloudPost } from "./cloud";
+import { readState } from "./device";
 
 interface PresignResult {
     url: string;
@@ -17,9 +18,12 @@ async function presign(operation: "upload" | "download", key: string): Promise<P
 
 export async function putBytes(key: string, data: Uint8Array): Promise<void> {
     const p = await presign("upload", key);
+    const token = readState()?.token;
+    const headers: Record<string, string> = { ...p.headers };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(p.url, {
         method: p.method,
-        headers: p.headers,
+        headers,
         body: Buffer.from(data),
         signal: AbortSignal.timeout(300000),
     });
@@ -30,9 +34,12 @@ export async function putBytes(key: string, data: Uint8Array): Promise<void> {
 
 export async function getBytes(key: string): Promise<Uint8Array> {
     const p = await presign("download", key);
+    const token = readState()?.token;
+    const headers: Record<string, string> = { ...p.headers };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(p.url, {
         method: p.method,
-        headers: p.headers,
+        headers,
         signal: AbortSignal.timeout(300000),
     });
     if (!res.ok) {
