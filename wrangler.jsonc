@@ -9,9 +9,19 @@
     "r2_buckets": [
         {
             "binding": "HANDOFFS_BUCKET",
-            "bucket_name": "localagents-handoffs"
+            "bucket_name": "local-agents"
         }
     ],
+    "env": {
+        "development": {
+            "r2_buckets": [
+                {
+                    "binding": "HANDOFFS_BUCKET",
+                    "bucket_name": "local-agents-dev"
+                }
+            ]
+        }
+    },
     "assets": {
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
