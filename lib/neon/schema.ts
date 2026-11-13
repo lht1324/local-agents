@@ -1,4 +1,4 @@
-import { bigint, boolean, integer, pgTable, primaryKey, real, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, pgTable, primaryKey, real, text, timestamp } from "drizzle-orm/pg-core";
 
 // 상주 데몬 1대 = 1행. 페어링 코드로 웹 계정과 연결한다.
 export const devices = pgTable("devices", {
@@ -98,7 +98,12 @@ export const cloudMessages = pgTable(
         body: text("body").notNull(),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
-    (t) => [primaryKey({ columns: [t.tabId, t.messageId] })],
+    (t) => [
+        primaryKey({ columns: [t.tabId, t.messageId] }),
+        // 워터마크 조회(탭별 최신 1행)와 웹 타임라인 정렬을 인덱스만으로 끝낸다.
+        // 세 칸이 모두 오름차순이라 Postgres 가 뒤로 훑으면 내림차순 정렬과 같아진다.
+        index("cloud_messages_tab_created_idx").on(t.tabId, t.createdAt, t.messageId),
+    ],
 );
 
 // 세션이 지금 어느 기기에 있는지. push/pull로 같은 세션이 여러 PC에 존재할 수 있어 N:M이다.

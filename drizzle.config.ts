@@ -32,6 +32,8 @@ export default {
     out: "./drizzle",
     dialect: "postgresql",
     dbCredentials: {
-        url: readDevVars().DATABASE_URL ?? "",
+        // 기본은 개발 브랜치(.dev.vars). 운영 브랜치에 적용할 때만 DATABASE_URL 로 덮어쓴다.
+        // (워커 런타임이 아니라 drizzle-kit CLI 에서만 읽는 값이다)
+        url: process.env.DATABASE_URL ?? readDevVars().DATABASE_URL ?? "",
     },
 } satisfies Config;

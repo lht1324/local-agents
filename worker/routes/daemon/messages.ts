@@ -21,7 +21,9 @@ interface MessageRow {
 const daemonMessages = new Hono<{ Bindings: AppEnv; Variables: DeviceVariables }>();
 
 // 증분 동기화 기준점. 서버에 저장된 마지막 행을 돌려준다.
-// 로컬 커서가 유실되거나 DB가 비워져도 이 값으로 정확히 이어서 올릴 수 있다.
+// 데몬은 로컬에 기준점을 저장하지 않고 매번 이 값만 본다.
+// 정렬은 데몬의 비교 규칙과 같아야 한다: createdAt 오름차순, 같으면 messageId 사전순.
+// seq 는 데몬이 "몇 번째로 가져왔나"를 담은 배열 인덱스라 요청마다 달라진다. 정렬에 쓰면 안 된다.
 daemonMessages.get("/watermark", async (c) => {
     const userId = c.get("userId");
     const sessionID = c.req.query("sessionID");
@@ -31,19 +33,18 @@ daemonMessages.get("/watermark", async (c) => {
     const rows = await getDb()
         .select({
             messageId: cloudMessages.messageId,
-            seq: cloudMessages.seq,
             createdAt: cloudMessages.createdAt,
         })
         .from(cloudMessages)
         .innerJoin(cloudTabs, eq(cloudMessages.tabId, cloudTabs.id))
         .where(and(eq(cloudMessages.tabId, sessionID), eq(cloudTabs.userId, userId)))
-        .orderBy(desc(cloudMessages.createdAt), desc(cloudMessages.seq))
+        .orderBy(desc(cloudMessages.createdAt), desc(cloudMessages.messageId))
         .limit(1);
     const row = rows[0];
     return getBaseResponse({
         success: true,
         status: 200,
-        data: row ? { messageId: row.messageId, seq: row.seq, createdAt: row.createdAt.getTime() } : null,
+        data: row ? { messageId: row.messageId, createdAt: row.createdAt.getTime() } : null,
     });
 });
 

@@ -79,8 +79,23 @@ function stateDir(): string {
     return join(homedir(), ".config", "localagents");
 }
 
+// 운영은 기존 경로(device.json)를 그대로 쓴다. 그 외(개발·자체 호스팅)는 호스트별로 나눈다.
+// 한 파일을 쓰면 dev 로그인이 운영 로그인을 덮어써 두 환경을 함께 쓸 수 없다.
+// 서버 주소가 곧 환경이므로 파일 이름도 서버 주소에서 만든다.
+function envSuffix(): string {
+    const url = baseUrl();
+    if (url === "https://localagents.link") {
+        return "";
+    }
+    const host = url
+        .replace(/^https?:\/\//, "")
+        .replace(/[^a-zA-Z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    return host ? `.${host}` : "";
+}
+
 function statePath(): string {
-    return join(stateDir(), "device.json");
+    return join(stateDir(), `device${envSuffix()}.json`);
 }
 
 export function readState(): DeviceState | null {
@@ -103,9 +118,20 @@ export function baseUrl(): string {
     if (process.env.LOCALAGENTS_BASE_URL) {
         return process.env.LOCALAGENTS_BASE_URL;
     }
-    // node_modules에 있으면 npm 설치 (prod), 아니면 dev
-    const isInstalled = process.argv[1]?.includes("node_modules") ?? false;
-    return isInstalled ? "https://localagents.link" : "https://dev.localagents.link";
+    // 실행 경로로 배포를 판별한다. 3가지:
+    //   npm/npx 설치본          → prod
+    //   서비스 설치본 (사용자 PC) → prod
+    //   저장소에서 직접 실행       → dev
+    // 주의: 서비스 설치본은 node_modules 아래가 아니라 ~/.local/share/localagents/app 다.
+    // node_modules 여부만 보면 dev 로 떨어져 prod 사용자의 데이터가 dev 로 간다.
+    const entry = (process.argv[1] ?? "").replace(/\\/g, "/");
+    if (entry.includes("node_modules")) {
+        return "https://localagents.link";
+    }
+    if (entry.includes("/.local/share/localagents/")) {
+        return "https://localagents.link";
+    }
+    return "https://dev.localagents.link";
 }
 
 export function writeState(state: DeviceState): void {
@@ -118,11 +144,6 @@ export function writeState(state: DeviceState): void {
 export function clearState(): void {
     try {
         unlinkSync(statePath());
-    } catch {
-        // 없어도 정상
-    }
-    try {
-        unlinkSync(join(stateDir(), "cursors.json"));
     } catch {
         // 없어도 정상
     }

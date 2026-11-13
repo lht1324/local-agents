@@ -6,7 +6,6 @@ import { cloudGet, cloudPost } from "./cloud";
 import { readState } from "./device";
 import { backfillSession } from "./messages";
 import { applyTabPackageUpsert, dbPath, epochOf, latestOf, readTabPackage, sessionExists, type TabPackage } from "./localdb";
-import { readPushMark, writePushMark } from "./pushstate";
 import { getBytes, putBytes } from "./storage";
 
 export interface HandoffVersion {
@@ -117,14 +116,10 @@ export async function pushOneTab(
             console.log(`  push mark (DB): none (first push)`);
         }
     } catch {
-        // DB 읽기 실패 시 로컬 캐시 사용
-        const local = readPushMark(sid);
-        if (local) {
-            dbPushMark = { at: local.at, id: local.id, seq: local.seq ?? 0 };
-            console.log(`  push mark (local): at=${dbPushMark.at} id=${dbPushMark.id}`);
-        } else {
-            console.log(`  push mark: none (first push)`);
-        }
+        // DB 조회가 실패하면 기준점 없이 전체 스냅샷을 올린다.
+        // 로컬 캐시를 쓰지 않는 이유: 다른 환경(dev/prod)의 캐시가 섞이면 기준점을 앞으로
+        // 당겨 스냅샷에서 메시지가 조용히 빠진다. 전체 업로드는 용량만 늘고 정합성은 안전하다.
+        console.log(`  push mark: unavailable (DB read failed). pushing full snapshot.`);
     }
     const since = dbPushMark ? { at: dbPushMark.at, id: dbPushMark.id, seq: dbPushMark.seq } : null;
     const packed = packTab(sid, since);
@@ -159,9 +154,6 @@ export async function pushOneTab(
         pushMarkSeq: latestMark?.seq ?? null,
     });
     show(1);
-    if (latestMark) {
-        writePushMark(sid, latestMark.at, latestMark.id, latestMark.seq);
-    }
     return { rows: packed.rowCount };
 }
 
@@ -185,10 +177,6 @@ export async function syncOneTab(
     await pushOneTab(server, userId, sid, title, (f) => draw(0.5 + f * 0.5));
     draw(1);
     process.stdout.write("\n");
-    const newMark = latestOf(sid);
-    if (newMark) {
-        writePushMark(sid, newMark.at, newMark.id);
-    }
 }
 
 // dump 진단. 정준 패키지를 Storage user_id/dump에 올리고 키만 뱉는다. 포인터 없음.
@@ -244,12 +232,6 @@ export async function pullVersion(version: HandoffVersion): Promise<{ created: b
     }
 
     const applied = applyTabPackageUpsert(pkg, version.title);
-
-    // DB에서 push mark 읽어서 로컬 push mark 설정
-    if (version.pushMarkAt && version.pushMarkId) {
-        writePushMark(version.tabId, version.pushMarkAt, version.pushMarkId, version.pushMarkSeq ?? 0);
-    }
-
 
     await cloudPost("/api/daemon/handoffs", { receivedVersion: version.version });
     putProgress(name, 100);

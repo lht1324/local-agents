@@ -1,0 +1,1 @@
+CREATE INDEX "cloud_messages_tab_created_idx" ON "cloud_messages" USING btree ("tab_id","created_at","message_id");

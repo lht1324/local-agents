@@ -1,14 +1,12 @@
 import { apiGet, type DiscoveredServer } from "./server";
 import { formatToolExit } from "./tools";
 import { cloudGet, cloudPost } from "./cloud";
-import { isNewer, readCursor, writeCursor } from "./cursors";
+import { isNewer, type Watermark } from "./watermark";
+import { childSessionIds, readEpochRows, sessionParentId } from "./localdb";
+import type { PlainRow, ServerMessage } from "./types";
 
-interface Watermark {
-    createdAt: number;
-    messageId: string;
-}
-
-// 서버에 저장된 마지막 행. 로컬 커서보다 신뢰한다 (재설치·DB 초기화·다중 기기 대응).
+// 서버에 저장된 마지막 행. 기준점은 이것 하나뿐이다
+// (재설치·DB 초기화·다른 환경(dev/prod) 공존을 모두 견딘다).
 async function readServerWatermark(sessionID: string): Promise<Watermark | null> {
     try {
         const body = (await cloudGet(
@@ -23,16 +21,6 @@ async function readServerWatermark(sessionID: string): Promise<Watermark | null>
         return null;
     }
 }
-
-// 둘 중 더 새로운 기준점을 고른다.
-function newerOf(a: Watermark | null, b: Watermark | null): Watermark | null {
-    if (!a) return b;
-    if (!b) return a;
-    if (a.createdAt !== b.createdAt) return a.createdAt > b.createdAt ? a : b;
-    return a.messageId >= b.messageId ? a : b;
-}
-import { childSessionIds, readEpochRows, sessionParentId } from "./localdb";
-import type { PlainRow, ServerMessage } from "./types";
 
 function cap(text: string, limit: number): string {
     return text.length > limit ? `${text.slice(0, limit)}…[truncated]` : text;
@@ -150,8 +138,11 @@ async function fetchMessages(server: DiscoveredServer, sessionID: string): Promi
 export async function syncMessages(server: DiscoveredServer, sessionID: string): Promise<{ rows: number }> {
     const messages = await fetchMessages(server, sessionID);
     const rows = flatten(messages);
-    // 차집합: 기준점보다 새로운 행만 올린다. 기준점은 서버 저장분 우선, 로컬 커서는 보조.
-    const cursor = newerOf(readCursor(sessionID), await readServerWatermark(sessionID));
+    // 차집합: 기준점보다 새로운 행만 올린다. 기준점은 서버에 저장된 마지막 행 하나뿐이다.
+    // 로컬 커서를 두지 않는 이유: 다른 환경(dev/prod)의 커서가 섞이면 기준점을 앞으로 당겨
+    // 메시지를 조용히 누락시킨다. 재업로드는 onConflictDoNothing 이라 무해하므로
+    // 기준점은 항상 서버 하나만 본다.
+    const cursor = await readServerWatermark(sessionID);
     const fresh = rows.filter((r) => isNewer(r.createdAt, r.id, cursor));
     if (fresh.length === 0) {
         return { rows: 0 };
@@ -167,16 +158,6 @@ export async function syncMessages(server: DiscoveredServer, sessionID: string):
             createdAt: r.createdAt,
         })),
     })) as { data?: { rows?: number } };
-    // 커터는 전송한 것 중 최대값으로 전진. 실패 시 다음 주기가 재시도.
-    let top = fresh[0];
-    for (const r of fresh) {
-        const a = r.createdAt ?? 0;
-        const b = top.createdAt ?? 0;
-        if (a > b || (a === b && r.id > top.id)) {
-            top = r;
-        }
-    }
-    writeCursor(sessionID, top.createdAt, top.id);
     return { rows: result.data?.rows ?? fresh.length };
 }
 
@@ -229,15 +210,6 @@ export async function backfillSession(
     if (!quiet && !report) {
         process.stdout.write("\n");
     }
-    let top = rows[0];
-    for (const r of rows) {
-        const a = r.createdAt ?? 0;
-        const b = top.createdAt ?? 0;
-        if (a > b || (a === b && r.id > top.id)) {
-            top = r;
-        }
-    }
-    writeCursor(sessionID, top.createdAt, top.id);
     return { rows: rows.length };
 }
 
@@ -335,28 +307,6 @@ export async function syncCurrentSessions(server: DiscoveredServer): Promise<{ s
         await cloudPost("/api/daemon/sessions/current", { sessionIds: targets });
     } catch {
         // 표시는 다음 주기에 다시 시도된다
-    }
-    return { sessions: targets.length, rows };
-}
-
-// 주기 안전망. 스풀 통지가 없어도 최근 활동 세션 본문을 올린다. 최대 5개, 실패는 건너뜀.
-export async function syncActiveMessages(server: DiscoveredServer, maxAgeMs = 3600000): Promise<{ sessions: number; rows: number }> {
-    const body = (await apiGet(server, "/session")) as
-        | { data?: { id: string; time?: { updated?: number } }[] }
-        | { id: string; time?: { updated?: number } }[];
-    const list = Array.isArray(body) ? body : (body.data ?? []);
-    const cutoff = Date.now() - maxAgeMs;
-    const targets = list
-        .filter((s) => typeof s.id === "string" && (s.time?.updated ?? 0) >= cutoff)
-        .slice(0, 5);
-    let rows = 0;
-    for (const t of targets) {
-        try {
-            const r = await syncMessages(server, t.id);
-            rows += r.rows;
-        } catch {
-            // 다음 주기가 잡는다
-        }
     }
     return { sessions: targets.length, rows };
 }
