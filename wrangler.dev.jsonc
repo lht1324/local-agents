@@ -1,0 +1,49 @@
+{
+    // 로컬 개발용 워커 설정. vite.config.ts 의 cloudflare({ configPath }) 가 이 파일을 읽는다.
+    //
+    // prod(wrangler.jsonc)와의 차이는 딱 두 가지다:
+    //   1) R2 버킷이 local-agents-dev
+    //   2) remote: true — 로컬 R2 시뮬레이터가 아니라 실제 버킷에 붙는다
+    //      (시뮬레이터를 쓰면 dev push 결과가 아무 데도 안 쌓인다)
+    //
+    // Neon 은 .dev.vars 의 DATABASE_URL 이 development 브랜치를 가리킨다.
+    // 즉 dev 는 prod 와 코드 경로가 같고, 버킷·DB 만 다르다.
+    "$schema": "./node_modules/wrangler/config-schema.json",
+    "name": "localagents-dev",
+    "compatibility_date": "2026-10-30",
+    "compatibility_flags": ["nodejs_compat"],
+    "main": "./worker/index.ts",
+    "observability": { "enabled": true },
+    "r2_buckets": [
+        {
+            "binding": "HANDOFFS_BUCKET",
+            "bucket_name": "local-agents-dev",
+            "remote": true
+        }
+    ],
+    "vars": {
+        "R2_ACCOUNT_ID": "9ab5fff4a2988fde61db5d5705759000",
+        "HANDOFFS_BUCKET_NAME": "local-agents-dev"
+    },
+    "assets": {
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "html_handling": "drop-trailing-slash",
+        "run_worker_first": [
+            "/api/*",
+            "/sitemap.xml",
+            "/robots.txt",
+            "/auth/sign-in",
+            "/sessions",
+            "/sessions/*",
+            "/devices",
+            "/devices/*",
+            "/profile",
+            "/profile/*",
+            "/billing",
+            "/billing/*",
+            "/device",
+            "/device/*"
+        ]
+    }
+}

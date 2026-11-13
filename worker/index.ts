@@ -35,8 +35,14 @@ app.use("*", async (c, next) => {
     await next();
 });
 // 본문 크기 상한. 동기화 행 배치가 커도 2MB면 충분하다.
-// 인계 파일은 워커를 거치지 않는다 (presigned URL 로 데몬이 R2 에 직접 PUT/GET).
-app.use("/api/*", bodyLimit());
+// 중계 업로드는 스트리밍이라 bodyLimit 을 걸지 않는다 (본문을 메모리에 올리지 않는다).
+// presigned 경로를 쓰면 이 경로 자체가 없다.
+app.use("/api/*", async (c, next) => {
+    if (c.req.method === "PUT" && c.req.path.endsWith("/upload")) {
+        return next();
+    }
+    return bodyLimit()(c, next);
+});
 
 // 인증 불필요
 app.route("/api/auth", authRoutes);
@@ -69,8 +75,10 @@ app.route("/api/daemon/commands", daemonCommands);
 app.route("/api/daemon/heartbeat", daemonHeartbeat);
 app.route("/api/daemon/sync", daemonSync);
 app.route("/api/daemon/messages", daemonMessages);
-app.route("/api/daemon/handoffs/url", daemonPresign);
 app.route("/api/daemon/handoffs", daemonHandoffs);
+// presign 발급(/url) + 중계 업로드/다운로드(/upload, /download).
+// 같은 prefix 에 두 라우트를 나란히 둔다. 경로가 겹치지 않는다.
+app.route("/api/daemon/handoffs", daemonPresign);
 
 app.notFound((c) => getBaseResponse({ success: false, status: 404, error: `not found: ${c.req.method} ${c.req.path}` }));
 

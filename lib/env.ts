@@ -15,12 +15,14 @@ export interface AppEnv {
     NEON_BRANCH_ID?: string;
     INTERNAL_FIRE_AND_FORGET_API_SECRET?: string;
     ASSETS: Fetcher;
+    /** R2 바인딩. 서명 자격증명이 없을 때 인계 파일 중계 경로가 쓴다. */
+    HANDOFFS_BUCKET: R2Bucket;
     /** R2 계정 ID. presigned URL 호스트를 만드는 데 쓴다 (비밀 아님). */
     R2_ACCOUNT_ID: string;
-    /** R2 API 토큰 id (= S3 Access Key ID) */
-    R2_ACCESS_KEY_ID: string;
-    /** R2 API 토큰 value 의 SHA-256 해시 (= S3 Secret Access Key) */
-    R2_SECRET_ACCESS_KEY: string;
+    /** R2 API 토큰 id (= S3 Access Key ID). 비면 중계 경로를 쓴다. */
+    R2_ACCESS_KEY_ID?: string;
+    /** R2 API 토큰 value 의 SHA-256 해시 (= S3 Secret Access Key). 비면 중계 경로를 쓴다. */
+    R2_SECRET_ACCESS_KEY?: string;
     /** 인계 파일이 들어갈 버킷. dev/prod 는 여기서 갈린다. */
     HANDOFFS_BUCKET_NAME: string;
 }
