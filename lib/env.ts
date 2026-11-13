@@ -15,7 +15,14 @@ export interface AppEnv {
     NEON_BRANCH_ID?: string;
     INTERNAL_FIRE_AND_FORGET_API_SECRET?: string;
     ASSETS: Fetcher;
-    HANDOFFS_BUCKET: R2Bucket;
+    /** R2 계정 ID. presigned URL 호스트를 만드는 데 쓴다 (비밀 아님). */
+    R2_ACCOUNT_ID: string;
+    /** R2 API 토큰 id (= S3 Access Key ID) */
+    R2_ACCESS_KEY_ID: string;
+    /** R2 API 토큰 value 의 SHA-256 해시 (= S3 Secret Access Key) */
+    R2_SECRET_ACCESS_KEY: string;
+    /** 인계 파일이 들어갈 버킷. dev/prod 는 여기서 갈린다. */
+    HANDOFFS_BUCKET_NAME: string;
 }
 
 let bound: AppEnv | null = null;

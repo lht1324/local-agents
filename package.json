@@ -9,6 +9,7 @@
         "preview": "vite preview",
         "deploy": "npm run build && wrangler deploy",
         "typecheck": "tsc -b",
+        "test:r2sign": "node scripts/test-r2sign.mjs",
         "db:generate": "drizzle-kit generate",
         "db:migrate": "drizzle-kit migrate",
         "prerender": "node scripts/prerender.mjs"

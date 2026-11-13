@@ -6,21 +6,12 @@
     "main": "./worker/index.ts",
     "upload_source_maps": true,
     "observability": { "enabled": true },
-    "r2_buckets": [
-        {
-            "binding": "HANDOFFS_BUCKET",
-            "bucket_name": "local-agents"
-        }
-    ],
-    "env": {
-        "development": {
-            "r2_buckets": [
-                {
-                    "binding": "HANDOFFS_BUCKET",
-                    "bucket_name": "local-agents-dev"
-                }
-            ]
-        }
+    // 인계 파일은 워커가 직접 다루지 않는다. 워커는 SigV4 서명만 하고
+    // 데몬이 presigned URL 로 R2 에 직행한다. 그래서 R2 바인딩이 필요 없다.
+    // 버킷 이름은 var 하나로 결정한다 (dev/prod 는 이 값만 다르다).
+    "vars": {
+        "R2_ACCOUNT_ID": "9ab5fff4a2988fde61db5d5705759000",
+        "HANDOFFS_BUCKET_NAME": "local-agents"
     },
     "assets": {
         "binding": "ASSETS",

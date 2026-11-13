@@ -3,7 +3,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import { createInterface } from "node:readline";
 import { apiGet, type DiscoveredServer } from "./server";
 import { cloudGet, cloudPost } from "./cloud";
-import { baseUrl, readState } from "./device";
+import { readState } from "./device";
 import { backfillSession } from "./messages";
 import { applyTabPackageUpsert, dbPath, epochOf, latestOf, readTabPackage, sessionExists, type TabPackage } from "./localdb";
 import { readPushMark, writePushMark } from "./pushstate";
@@ -198,29 +198,7 @@ export async function dumpTab(server: DiscoveredServer, userId: string, sid: str
         throw new Error("nothing to dump");
     }
     const key = `${userId}/dump/${sid}-${Date.now()}.bin.gz`;
-    const res = await fetch(`${baseUrl()}/api/daemon/handoffs/url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${readState()?.token ?? ""}` },
-        body: JSON.stringify({ operation: "upload", key }),
-        signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) {
-        throw new Error(`url rejected: ${res.status}`);
-    }
-    const body = (await res.json()) as { data?: { url?: string; method?: string; headers?: Record<string, string> } };
-    const url = body.data?.url;
-    if (!url) {
-        throw new Error("presign returned no url");
-    }
-    const put = await fetch(url, {
-        method: body.data?.method ?? "PUT",
-        headers: { "Content-Type": "application/gzip", ...(body.data?.headers ?? {}) },
-        body: Buffer.from(packed.bytes),
-        signal: AbortSignal.timeout(120000),
-    });
-    if (!put.ok) {
-        throw new Error(`upload rejected: ${put.status}`);
-    }
+    await putBytes(key, packed.bytes);
     return { key, bytes: packed.bytes.length };
 }
 // pull 본체. 버전 고르기 → 받기 → upsert(없으면 생성) → 검증. 함수라 자동화도 같은 걸 부른다.
