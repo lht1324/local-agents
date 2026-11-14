@@ -505,31 +505,21 @@ export function readTabPackage(
         if (bounds.length > 0) {
             cut = bounds[0].seq;
         }
-        // compaction 이후에 push mark가 가리키는 메시지가 없으면 (새 epoch) push mark를 버린다.
-        let effectiveSince = since ?? null;
-        if (effectiveSince) {
+        // push mark는 id로 식별하고, 비교는 "이 PC의" seq로 한다.
+        // DB에 저장된 push_mark_seq는 보낸 PC의 로컬 카운터다. pull은 받은 메시지의 seq를
+        // 새로 부여하므로 그 숫자를 그대로 비교하면 새 메시지가 0건으로 보여 push가 조용히
+        // 건너뛰어진다. 기준점 메시지의 로컬 seq를 조회하면 시계 차이도 동률 문제도 없다.
+        // 기준점 메시지가 이 PC에 없으면(새 epoch) compaction 이후 전체를 보낸다.
+        let markSeq: number | null = null;
+        if (since) {
             const found = db
-                .prepare("SELECT id FROM session_message WHERE session_id = ? AND id = ? AND seq > ?")
-                .get(sessionID, effectiveSince.id, cut) as { id: string } | undefined;
-            if (!found) {
-                effectiveSince = null;
-            }
+                .prepare("SELECT seq FROM session_message WHERE session_id = ? AND id = ? AND seq > ?")
+                .get(sessionID, since.id, cut) as { seq: number } | undefined;
+            markSeq = found?.seq ?? null;
         }
-        let msgQuery =
-            "SELECT id, type, seq, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? AND seq > ?";
-        const msgParams: unknown[] = [sessionID, cut];
-        if (effectiveSince) {
-            if (effectiveSince.seq && effectiveSince.seq > cut) {
-                // seq 기반: compaction 이후 단조 증가, 시계 차이에 영향 없음
-                msgQuery += " AND seq > ?";
-                msgParams.push(effectiveSince.seq);
-            } else {
-                // fallback: time_created + id
-                msgQuery += " AND (time_created > ? OR (time_created = ? AND id > ?))";
-                msgParams.push(effectiveSince.at, effectiveSince.at, effectiveSince.id);
-            }
-        }
-        msgQuery += " ORDER BY id ASC";
+        const msgQuery =
+            "SELECT id, type, seq, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? AND seq > ? ORDER BY id ASC";
+        const msgParams: unknown[] = [sessionID, markSeq === null ? cut : markSeq];
         const messages = db.prepare(msgQuery).all(...msgParams) as unknown as (TabMessage & { type: string })[];
         if (messages.length === 0) {
             return null;
