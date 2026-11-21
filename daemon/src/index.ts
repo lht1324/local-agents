@@ -873,8 +873,10 @@ async function onRun(): Promise<void> {
                     void (async () => {
                         try {
                             const server = await ensureServer();
-                            await syncMessages(server, tabId);
-                            console.log(`ws: synced ${tabId.slice(0, 12)}`);
+                            // 지금은 인계(R2) 경로로 받는다. raw 동기화가 들어오면 이 자리가
+                            // "커서 이후 행을 Neon에서 받아 로컬 DB에 적용"으로 바뀐다.
+                            await autoPull(server);
+                            console.log(`ws: pulled ${tabId.slice(0, 12)}`);
                         } catch {
                             // 다음 폴링이 잡는다.
                         }
