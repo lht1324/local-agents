@@ -36,3 +36,7 @@ skills-lock.json
 .dev.vars*
 *.tsbuildinfo
 node_modules/.tmp/
+
+# 세션 export 결과물(비밀 포함 가능) — 절대 커밋하지 않는다
+/localagentslink.json
+/*.export.json
