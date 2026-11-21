@@ -25,6 +25,8 @@ export interface AppEnv {
     R2_SECRET_ACCESS_KEY?: string;
     /** 인계 파일이 들어갈 버킷. dev/prod 는 여기서 갈린다. */
     HANDOFFS_BUCKET_NAME: string;
+    /** 알림 버스. 사용자당 Durable Object 하나가 열린 WebSocket을 들고 있다. */
+    ROOMS: DurableObjectNamespace;
 }
 
 let bound: AppEnv | null = null;

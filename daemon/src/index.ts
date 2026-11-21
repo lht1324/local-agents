@@ -8,6 +8,7 @@ import { ensureServer, killOwned, type ManagedServer } from "./serve";
 import { syncSessions } from "./sessions";
 import { syncCatalog } from "./catalog";
 import { backfillMissing, syncCurrentSessions, syncMessages } from "./messages";
+import { startSubscription, type BusEvent } from "./subscribe";
 import { checkboxPick, dumpTab, listVersions, pullVersion, pushTabs, syncOneTab } from "./handoff";
 import {
     countAll,
@@ -855,6 +856,37 @@ async function onRun(): Promise<void> {
     } catch (err) {
         console.error(`server ensure failed: ${err instanceof Error ? err.message : err}`);
     }
+    // 알림 버스 구독. 폴링은 안전망으로 그대로 두고 즉시성만 더한다.
+    // 같은 탭 이벤트가 몰리면 400ms 안에서 한 번으로 합친다.
+    const pendingTabSync = new Map<string, ReturnType<typeof setTimeout>>();
+    const stopSubscription = startSubscription((event: BusEvent) => {
+        if (event.kind === "message" && event.tabId) {
+            const tabId = event.tabId;
+            const existing = pendingTabSync.get(tabId);
+            if (existing) {
+                clearTimeout(existing);
+            }
+            pendingTabSync.set(
+                tabId,
+                setTimeout(() => {
+                    pendingTabSync.delete(tabId);
+                    void (async () => {
+                        try {
+                            const server = await ensureServer();
+                            await syncMessages(server, tabId);
+                            console.log(`ws: synced ${tabId.slice(0, 12)}`);
+                        } catch {
+                            // 다음 폴링이 잡는다.
+                        }
+                    })();
+                }, 400),
+            );
+            return;
+        }
+        if (event.kind === "command") {
+            void pollCommands().catch(() => undefined);
+        }
+    });
     while (!stopping) {
         const now = Date.now();
         // 느린 층: 플랜 주기. heartbeat·거울·카탈로그·안전망. 무겁다.
@@ -916,6 +948,10 @@ async function onRun(): Promise<void> {
         while (!stopping && Date.now() < deadline) {
             await sleep(Math.min(1000, deadline - Date.now()));
         }
+    }
+    stopSubscription();
+    for (const timer of pendingTabSync.values()) {
+        clearTimeout(timer);
     }
     try {
         await onHeartbeat();

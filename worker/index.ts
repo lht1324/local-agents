@@ -21,6 +21,7 @@ import daemonSync from "./routes/daemon/sync";
 import daemonMessages from "./routes/daemon/messages";
 import daemonHandoffs from "./routes/daemon/handoffs";
 import daemonPresign from "./routes/daemon/presign";
+import daemonWs from "./routes/daemon/ws";
 import { requireDevice } from "./middleware/device";
 import { requireSession, type AuthVariables } from "./middleware/auth";
 import { bodyLimit } from "./middleware/bodyLimit";
@@ -68,6 +69,10 @@ app.route("/api/web/account", webAccount);
 app.route("/api/web/me", webMe);
 app.route("/api/web/devices", webDeviceUnlink);
 
+// 데몬 구독(WebSocket). 브라우저·Node 클라이언트는 핸드셰이크에 헤더를 못 넣는 경우가
+// 있어서 쿼리 토큰도 받는다. 그래서 requireDevice보다 **앞에** 둔다.
+app.route("/api/daemon/ws", daemonWs);
+
 // 데몬 채널 (기기 토큰)
 app.use("/api/daemon/*", requireDevice);
 app.route("/api/daemon", daemonBasic);
@@ -79,6 +84,8 @@ app.route("/api/daemon/handoffs", daemonHandoffs);
 // presign 발급(/url) + 중계 업로드/다운로드(/upload, /download).
 // 같은 prefix 에 두 라우트를 나란히 둔다. 경로가 겹치지 않는다.
 app.route("/api/daemon/handoffs", daemonPresign);
+// 데몬 구독(WebSocket). 알림 버스 — 데이터가 아니라 신호만 중계한다.
+app.route("/api/daemon/ws", daemonWs);
 
 app.notFound((c) => getBaseResponse({ success: false, status: 404, error: `not found: ${c.req.method} ${c.req.path}` }));
 
@@ -88,3 +95,6 @@ app.onError((error, c) => {
 });
 
 export default app;
+
+// Durable Object 클래스는 엔트리 모듈에서 export되어야 wrangler가 바인딩한다.
+export { NotificationRoom } from "./do/room";

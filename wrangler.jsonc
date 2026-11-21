@@ -14,6 +14,21 @@
             "bucket_name": "local-agents"
         }
     ],
+    // 알림 버스. 사용자당 방 하나가 WebSocket을 들고 있고, 저장은 하지 않는다.
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "ROOMS",
+                "class_name": "NotificationRoom"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": ["NotificationRoom"]
+        }
+    ],
     // 버킷 이름은 var 하나로 결정한다 (dev/prod 는 이 값만 다르다).
     "vars": {
         "R2_ACCOUNT_ID": "9ab5fff4a2988fde61db5d5705759000",

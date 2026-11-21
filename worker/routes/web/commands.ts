@@ -6,6 +6,7 @@ import { getDb } from "../../../lib/neon/client";
 import { commands, devices, sessionsMeta } from "../../../lib/neon/schema";
 import type { AppEnv } from "../../../lib/env";
 import type { AuthVariables } from "../../middleware/auth";
+import { notifyInBackground } from "../../notify";
 import { getBaseResponse } from "../../utils/getBaseResponse";
 
 const EXPIRES_IN_MS = 7 * 24 * 60 * 60 * 1000;
@@ -84,6 +85,8 @@ commandsRoute.post("/", async (c) => {
         idempotencyKey: randomUUID(),
         expiresAt: new Date(Date.now() + EXPIRES_IN_MS),
     });
+    // 대상 기기가 붙어 있으면 즉시 받는다. 없으면 다음 폴링이 가져간다.
+    notifyInBackground(c.executionCtx, userId, { kind: "command", tabId: tabId ?? undefined, id });
     return getBaseResponse({ success: true, status: 201, data: { id, status: "pending" } });
 });
 

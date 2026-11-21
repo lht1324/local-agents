@@ -5,6 +5,7 @@ import { getDb } from "../../../lib/neon/client";
 import { handoffs } from "../../../lib/neon/schema";
 import type { AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
+import { notifyInBackground } from "../../notify";
 import { getBaseResponse } from "../../utils/getBaseResponse";
 
 const daemonHandoffs = new Hono<{ Bindings: AppEnv; Variables: DeviceVariables }>();
@@ -78,6 +79,7 @@ daemonHandoffs.post("/", async (c) => {
             .update(handoffs)
             .set({ receivedBy: deviceId, receivedAt: new Date() })
             .where(and(eq(handoffs.version, body.receivedVersion), eq(handoffs.userId, userId)));
+        notifyInBackground(c.executionCtx, userId, { kind: "handoff", from: deviceId });
         return getBaseResponse({ success: true, status: 200, data: { received: body.receivedVersion } });
     }
 
@@ -112,6 +114,8 @@ daemonHandoffs.post("/", async (c) => {
         pushMarkSeq: typeof body.pushMarkSeq === "number" ? body.pushMarkSeq : null,
         expiresAt,
     });
+    // 새 버전이 생겼다는 신호. 다른 기기는 목록을 다시 읽고 필요하면 pull 한다.
+    notifyInBackground(c.executionCtx, userId, { kind: "handoff", tabId: body.tabId, id: body.version, from: deviceId });
     return getBaseResponse({ success: true, status: 201, data: { version: body.version } });
 });
 

@@ -5,6 +5,7 @@ import { getDb } from "../../../lib/neon/client";
 import { cloudMessages, cloudTabs, sessionLocations, sessionsMeta } from "../../../lib/neon/schema";
 import type { AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
+import { notifyInBackground } from "../../notify";
 import { getBaseResponse } from "../../utils/getBaseResponse";
 
 interface MessageRow {
@@ -65,6 +66,8 @@ daemonMessages.post("/", async (c) => {
     const rows = Array.isArray(body.messages) ? (body.messages as MessageRow[]) : [];
     const db = getDb();
     const tabs = new Set<string>();
+    // 탭별 마지막으로 들어온 메시지 id. 알림에는 내용이 아니라 이 포인터만 보낸다.
+    const lastByTab = new Map<string, string>();
     let inserted = 0;
 
     for (const m of rows) {
@@ -120,7 +123,12 @@ daemonMessages.post("/", async (c) => {
                 ...(createdAt && !isNaN(createdAt.getTime()) ? { createdAt } : {}),
             })
             .onConflictDoNothing();
+        lastByTab.set(m.sessionID, messageId);
         inserted++;
+    }
+    // 같은 탭에 여러 행이 와도 알림은 1회. 데몬은 신호만 받고 커서로 따라잡는다.
+    for (const [tabId, messageId] of lastByTab) {
+        notifyInBackground(c.executionCtx, userId, { kind: "message", tabId, id: messageId, from: deviceId });
     }
     return getBaseResponse({ success: true, status: 200, data: { rows: inserted } });
 });

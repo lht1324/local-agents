@@ -21,6 +21,21 @@
             "remote": true
         }
     ],
+    // 알림 버스. 사용자당 방 하나가 WebSocket을 들고 있고, 저장은 하지 않는다.
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "ROOMS",
+                "class_name": "NotificationRoom"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": ["NotificationRoom"]
+        }
+    ],
     "vars": {
         "R2_ACCOUNT_ID": "9ab5fff4a2988fde61db5d5705759000",
         "HANDOFFS_BUCKET_NAME": "local-agents-dev"
