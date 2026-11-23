@@ -266,6 +266,7 @@ daemonLog.get("/", async (c) => {
             timeCreated: sessionMessages.timeCreated,
             timeUpdated: sessionMessages.timeUpdated,
             data: sessionMessages.data,
+            deviceId: sessionMessages.deviceId,
         })
         .from(sessionMessages)
         .where(and(eq(sessionMessages.userId, userId), eq(sessionMessages.sessionId, sessionId), after))
