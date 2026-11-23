@@ -8,7 +8,7 @@
 // hibernation이 걸리면 소켓은 플랫폼이 보관하고, 메시지가 올 때만 객체가 깨어난다.
 
 export interface NotifyEvent {
-    kind: "message" | "meta" | "revert" | "handoff" | "command" | "deleted";
+    kind: "message" | "meta" | "revert" | "handoff" | "command" | "deleted" | "log";
     tabId?: string;
     /** 메시지/기준점 id. 내용이 아니라 포인터만 보낸다. */
     id?: string;
