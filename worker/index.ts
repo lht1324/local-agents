@@ -22,7 +22,7 @@ import daemonMessages from "./routes/daemon/messages";
 import daemonHandoffs from "./routes/daemon/handoffs";
 import daemonPresign from "./routes/daemon/presign";
 import daemonWs from "./routes/daemon/ws";
-import daemonLog from "./routes/daemon/log";
+import daemonSessionMessages from "./routes/daemon/sessionMessages";
 import { requireDevice } from "./middleware/device";
 import { requireSession, type AuthVariables } from "./middleware/auth";
 import { bodyLimit } from "./middleware/bodyLimit";
@@ -82,7 +82,7 @@ app.route("/api/daemon/heartbeat", daemonHeartbeat);
 app.route("/api/daemon/sync", daemonSync);
 app.route("/api/daemon/messages", daemonMessages);
 // raw 동기화 — 원본 행(session_message)을 그대로 주고받는다.
-app.route("/api/daemon/log", daemonLog);
+app.route("/api/daemon/session-messages", daemonSessionMessages);
 app.route("/api/daemon/handoffs", daemonHandoffs);
 // presign 발급(/url) + 중계 업로드/다운로드(/upload, /download).
 // 같은 prefix 에 두 라우트를 나란히 둔다. 경로가 겹치지 않는다.
