@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { checkBillingGate } from "../../../lib/billing";
 import { getDb } from "../../../lib/neon/client";
-import { deviceCursors, sessionMessages, sessionParts, sessionState } from "../../../lib/neon/schema";
+import { deviceCursors, sessionLinks, sessionMessages, sessionParts, sessionShares, sessionState } from "../../../lib/neon/schema";
 import type { AppEnv } from "../../../lib/env";
 import type { DeviceVariables } from "../../middleware/device";
 import { notifyInBackground } from "../../notify";
@@ -334,6 +334,158 @@ daemonLog.get("/", async (c) => {
             state,
             hasMore: messages.length === limit,
             nextCursor: last ? { timeCreated: last.timeCreated, id: last.id } : null,
+        },
+    });
+});
+
+// 공유 세션 등록. 만든 기기는 자동으로 연동된다.
+daemonLog.post("/share", async (c) => {
+    const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    let body: { sessionId?: unknown };
+    try {
+        body = (await c.req.json()) as typeof body;
+    } catch {
+        return getBaseResponse({ success: false, status: 400, error: "invalid JSON body" });
+    }
+    const sessionId = str(body.sessionId);
+    if (!sessionId) {
+        return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
+    }
+    const db = getDb();
+    await db
+        .insert(sessionShares)
+        .values({ sessionId, userId })
+        .onConflictDoUpdate({ target: sessionShares.sessionId, set: { userId } });
+    await db
+        .insert(sessionLinks)
+        .values({ userId, sessionId, deviceId })
+        .onConflictDoUpdate({
+            target: [sessionLinks.userId, sessionLinks.sessionId, sessionLinks.deviceId],
+            set: { linkedAt: new Date() },
+        });
+    return getBaseResponse({ success: true, status: 200, data: { sessionId, shared: true } });
+});
+
+// 공유 해제. 연동도 함께 지운다 (자동 동기화 중지).
+daemonLog.delete("/share", async (c) => {
+    const userId = c.get("userId");
+    const sessionId = c.req.query("sessionId");
+    if (!sessionId) {
+        return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
+    }
+    const db = getDb();
+    await db.delete(sessionLinks).where(and(eq(sessionLinks.userId, userId), eq(sessionLinks.sessionId, sessionId)));
+    await db.delete(sessionShares).where(and(eq(sessionShares.userId, userId), eq(sessionShares.sessionId, sessionId)));
+    return getBaseResponse({ success: true, status: 200, data: { sessionId, shared: false } });
+});
+
+// 이 기기를 공유 세션에 연동. 공유되지 않은 세션은 거부한다.
+daemonLog.post("/link", async (c) => {
+    const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    let body: { sessionId?: unknown };
+    try {
+        body = (await c.req.json()) as typeof body;
+    } catch {
+        return getBaseResponse({ success: false, status: 400, error: "invalid JSON body" });
+    }
+    const sessionId = str(body.sessionId);
+    if (!sessionId) {
+        return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
+    }
+    const db = getDb();
+    const shared = await db
+        .select({ sessionId: sessionShares.sessionId })
+        .from(sessionShares)
+        .where(and(eq(sessionShares.userId, userId), eq(sessionShares.sessionId, sessionId)))
+        .limit(1);
+    if (shared.length === 0) {
+        return getBaseResponse({ success: false, status: 404, error: "session is not shared" });
+    }
+    await db
+        .insert(sessionLinks)
+        .values({ userId, sessionId, deviceId })
+        .onConflictDoUpdate({
+            target: [sessionLinks.userId, sessionLinks.sessionId, sessionLinks.deviceId],
+            set: { linkedAt: new Date() },
+        });
+    return getBaseResponse({ success: true, status: 200, data: { sessionId, linked: true } });
+});
+
+daemonLog.delete("/link", async (c) => {
+    const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    const sessionId = c.req.query("sessionId");
+    if (!sessionId) {
+        return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
+    }
+    await getDb()
+        .delete(sessionLinks)
+        .where(
+            and(
+                eq(sessionLinks.userId, userId),
+                eq(sessionLinks.deviceId, deviceId),
+                eq(sessionLinks.sessionId, sessionId),
+            ),
+        );
+    return getBaseResponse({ success: true, status: 200, data: { sessionId, linked: false } });
+});
+
+// 이 기기에 연동된 공유 세션 목록 + 다운로드 커서. 데몬이 동기화 대상으로 쓴다.
+daemonLog.get("/shared", async (c) => {
+    const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    const db = getDb();
+    const rows = await db
+        .select({
+            sessionId: sessionLinks.sessionId,
+            linkedAt: sessionLinks.linkedAt,
+            title: sessionState.title,
+            directory: sessionState.directory,
+            parentId: sessionState.parentId,
+            updatedAt: sessionState.updatedAt,
+            deletedAt: sessionState.deletedAt,
+            downTimeCreated: deviceCursors.downTimeCreated,
+            downMessageId: deviceCursors.downMessageId,
+            upTimeCreated: deviceCursors.upTimeCreated,
+        })
+        .from(sessionLinks)
+        .innerJoin(
+            sessionShares,
+            and(eq(sessionShares.userId, userId), eq(sessionShares.sessionId, sessionLinks.sessionId)),
+        )
+        .leftJoin(sessionState, eq(sessionState.sessionId, sessionLinks.sessionId))
+        .leftJoin(
+            deviceCursors,
+            and(
+                eq(deviceCursors.userId, userId),
+                eq(deviceCursors.deviceId, deviceId),
+                eq(deviceCursors.sessionId, sessionLinks.sessionId),
+            ),
+        )
+        .where(and(eq(sessionLinks.userId, userId), eq(sessionLinks.deviceId, deviceId)));
+    return getBaseResponse({
+        success: true,
+        status: 200,
+        data: {
+            sessions: rows.map((r) => ({
+                sessionId: r.sessionId,
+                title: r.title,
+                directory: r.directory,
+                parentId: r.parentId,
+                linkedAt: r.linkedAt.toISOString(),
+                updatedAt: r.updatedAt ? r.updatedAt.toISOString() : null,
+                deletedAt: r.deletedAt ? r.deletedAt.toISOString() : null,
+                downCursor:
+                    r.downTimeCreated && r.downMessageId
+                        ? { timeCreated: r.downTimeCreated, id: r.downMessageId }
+                        : null,
+                upCursor:
+                    r.upTimeCreated
+                        ? { timeCreated: r.upTimeCreated }
+                        : null,
+            })),
         },
     });
 });

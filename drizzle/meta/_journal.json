@@ -169,6 +169,13 @@
       "when": 1795454584995,
       "tag": "0023_high_sebastian_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795455874190,
+      "tag": "0024_fixed_payback",
+      "breakpoints": true
     }
   ]
 }

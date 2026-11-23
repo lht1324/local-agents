@@ -295,3 +295,25 @@ export const deviceCursors = pgTable(
     },
     (t) => [primaryKey({ columns: [t.userId, t.deviceId, t.sessionId] })],
 );
+
+// 공유 세션. 데몬은 이 표에 있는 세션만 자동으로 주고받는다.
+export const sessionShares = pgTable("session_share", {
+    sessionId: text("session_id").primaryKey(),
+    userId: text("user_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// 공유 세션에 연동된 기기. link 한 기기만 동기화한다.
+export const sessionLinks = pgTable(
+    "session_link",
+    {
+        userId: text("user_id").notNull(),
+        sessionId: text("session_id").notNull(),
+        deviceId: text("device_id").notNull(),
+        linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [
+        primaryKey({ columns: [t.userId, t.sessionId, t.deviceId] }),
+        index("session_link_device_idx").on(t.userId, t.deviceId),
+    ],
+);
