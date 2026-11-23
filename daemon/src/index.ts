@@ -9,7 +9,7 @@ import { syncSessions } from "./sessions";
 import { syncCatalog } from "./catalog";
 import { backfillMissing, syncCurrentSessions, syncMessages } from "./messages";
 import { startSubscription, type BusEvent } from "./subscribe";
-import { downloadSession, linkSession, listShared, shareSession, syncShared, uploadSession } from "./rawsync";
+import { downloadSession, linkSession, listShared, listShares, shareSession, syncShared, uploadSession } from "./rawsync";
 import { queueNotice } from "./notice";
 import { checkboxPick, dumpTab, listVersions, pullVersion, pushTabs, syncOneTab } from "./handoff";
 import {
@@ -304,22 +304,22 @@ async function onShare(arg?: string): Promise<void> {
 // 공유 세션에 이 기기를 연동하고, 최초 전체 다운로드/적용까지 수행.
 async function onLink(arg?: string): Promise<void> {
     await ensureAuth();
-    const shared = await listShared();
+    const shares = await listShares();
     let sessionId = arg && arg.length > 0 ? arg : null;
     if (!sessionId) {
-        if (shared.length === 0) {
+        if (shares.length === 0) {
             console.log("no shared sessions. run `localagents share` on the other PC first.");
             return;
         }
         const picked = await checkboxPick(
-            shared.map((item) => `${item.title ?? item.sessionId.slice(0, 12)} (${item.updatedAt ?? "no data"})`),
+            shares.map((item) => `${item.title ?? item.sessionId.slice(0, 12)} · ${item.sessionId}`),
             [],
         );
         if (picked.length === 0) {
             console.log("Nothing picked.");
             return;
         }
-        sessionId = shared[picked[0]].sessionId;
+        sessionId = shares[picked[0]].sessionId;
     }
     await linkSession(sessionId);
     const result = await downloadSession(sessionId, null);

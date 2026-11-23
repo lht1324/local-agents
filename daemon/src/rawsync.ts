@@ -49,6 +49,20 @@ export async function listShared(): Promise<SharedSession[]> {
     return body.data?.sessions ?? [];
 }
 
+export interface ShareInfo {
+    sessionId: string;
+    title: string | null;
+    directory: string | null;
+    sharedAt: string;
+    updatedAt: string | null;
+}
+
+// 사용자의 모든 공유 세션. link 선택기는 이 목록을 써야 한다 (연동 전 기기도 보여야 함).
+export async function listShares(): Promise<ShareInfo[]> {
+    const body = (await cloudGet("/api/daemon/session-messages/shares")) as { data?: { sessions?: ShareInfo[] } };
+    return body.data?.sessions ?? [];
+}
+
 export async function shareSession(sessionId: string): Promise<void> {
     await cloudPost("/api/daemon/session-messages/share", { sessionId });
 }

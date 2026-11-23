@@ -432,6 +432,37 @@ daemonLog.delete("/link", async (c) => {
     return getBaseResponse({ success: true, status: 200, data: { sessionId, linked: false } });
 });
 
+// 이 사용자의 모든 공유 세션. link 선택기가 쓴다 (아직 연동하지 않은 기기도 보여야 한다).
+daemonLog.get("/shares", async (c) => {
+    const userId = c.get("userId");
+    const rows = await getDb()
+        .select({
+            sessionId: sessionShares.sessionId,
+            sharedAt: sessionShares.createdAt,
+            title: sessionState.title,
+            directory: sessionState.directory,
+            updatedAt: sessionState.updatedAt,
+            deletedAt: sessionState.deletedAt,
+        })
+        .from(sessionShares)
+        .leftJoin(sessionState, eq(sessionState.sessionId, sessionShares.sessionId))
+        .where(eq(sessionShares.userId, userId));
+    return getBaseResponse({
+        success: true,
+        status: 200,
+        data: {
+            sessions: rows.map((r) => ({
+                sessionId: r.sessionId,
+                title: r.title,
+                directory: r.directory,
+                sharedAt: r.sharedAt.toISOString(),
+                updatedAt: r.updatedAt ? r.updatedAt.toISOString() : null,
+                deletedAt: r.deletedAt ? r.deletedAt.toISOString() : null,
+            })),
+        },
+    });
+});
+
 // 이 기기에 연동된 공유 세션 목록 + 다운로드 커서. 데몬이 동기화 대상으로 쓴다.
 daemonLog.get("/shared", async (c) => {
     const userId = c.get("userId");
