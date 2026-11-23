@@ -156,7 +156,8 @@ interface LogResponse {
 export async function downloadSession(
     sessionId: string,
     cursor: { timeCreated: number; id: string } | null,
-    maxPages = 20,
+    // 안전 상한일 뿐이다. 200행/페이지 × 1,000 = 20만 행까지 받는다.
+    maxPages = 1_000,
 ): Promise<{ applied: number; title: string | null }> {
     let current = cursor;
     let applied = 0;
@@ -228,10 +229,15 @@ export async function downloadSession(
             });
         }
         current = data.nextCursor ?? current;
+        if (page > 0 && page % 10 === 0) {
+            console.log(`  ${sessionId.slice(0, 12)}: ${applied} messages applied...`);
+        }
         if (!data.hasMore) {
-            break;
+            return { applied, title };
         }
     }
+    // 상한에 걸린 경우 조용히 자르지 않는다. 다음 동기화가 커서부터 이어받는다.
+    console.warn(`  ${sessionId.slice(0, 12)}: stopped at ${applied} messages (page cap). continuing next sync.`);
     return { applied, title };
 }
 
