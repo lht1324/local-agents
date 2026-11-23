@@ -162,6 +162,13 @@
       "when": 1794601676518,
       "tag": "0022_far_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795454584995,
+      "tag": "0023_high_sebastian_shaw",
+      "breakpoints": true
     }
   ]
 }

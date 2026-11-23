@@ -217,3 +217,81 @@ export const cloudFolds = pgTable(
     },
     (t) => [primaryKey({ columns: [t.tabId, t.epoch] })],
 );
+
+// ── raw 동기화 ────────────────────────────────────────────────
+// 로컬 OpenCode SQLite(session_message)를 1:1로 옮기는 원본 로그.
+// data는 절단하지 않고 그대로 보관한다. seq는 기기 로컬 값이라 저장하지 않는다.
+// 붙이고 떼기 쉽도록 컬럼 이름을 SQLite와 동일하게 맞췄다 (device_id, received_at만 추가).
+export const sessionMessages = pgTable(
+    "session_message",
+    {
+        userId: text("user_id").notNull(),
+        sessionId: text("session_id").notNull(),
+        id: text("id").notNull(),
+        type: text("type").notNull(),
+        timeCreated: bigint("time_created", { mode: "number" }).notNull(),
+        timeUpdated: bigint("time_updated", { mode: "number" }),
+        data: text("data").notNull(),
+        deviceId: text("device_id").notNull(),
+        receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [
+        primaryKey({ columns: [t.sessionId, t.id] }),
+        // 커서 조회(기기별 since)와 정렬을 인덱스로 끝낸다.
+        index("session_message_cursor_idx").on(t.sessionId, t.timeCreated, t.id),
+        index("session_message_user_idx").on(t.userId, t.sessionId),
+    ],
+);
+
+// v1 세션의 part 테이블 거울. v2는 part가 message data 안에 들어 있어 비어 있다.
+export const sessionParts = pgTable(
+    "session_part",
+    {
+        userId: text("user_id").notNull(),
+        sessionId: text("session_id").notNull(),
+        id: text("id").notNull(),
+        messageId: text("message_id").notNull(),
+        timeCreated: bigint("time_created", { mode: "number" }).notNull(),
+        timeUpdated: bigint("time_updated", { mode: "number" }),
+        data: text("data").notNull(),
+        deviceId: text("device_id").notNull(),
+        receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [
+        primaryKey({ columns: [t.sessionId, t.id] }),
+        index("session_part_message_idx").on(t.sessionId, t.messageId),
+    ],
+);
+
+// 메시지에 담기지 않는 세션 상태. Undo 포인터(revert)와 모델 선택이 여기 있다.
+export const sessionState = pgTable("session_state", {
+    sessionId: text("session_id").primaryKey(),
+    userId: text("user_id").notNull(),
+    title: text("title"),
+    directory: text("directory"),
+    agent: text("agent"),
+    model: text("model"),
+    revert: text("revert"),
+    parentId: text("parent_id"),
+    provider: text("provider"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    deviceId: text("device_id").notNull(),
+});
+
+// 기기별 진행 위치. 업로드(up)와 다운로드(down) 커서를 따로 둔다.
+// 기존 탭 전역 워터마크가 늦게 도착한 행을 건너뛰던 문제를 여기서 없앤다.
+export const deviceCursors = pgTable(
+    "device_cursor",
+    {
+        userId: text("user_id").notNull(),
+        deviceId: text("device_id").notNull(),
+        sessionId: text("session_id").notNull(),
+        upTimeCreated: bigint("up_time_created", { mode: "number" }),
+        upMessageId: text("up_message_id"),
+        downTimeCreated: bigint("down_time_created", { mode: "number" }),
+        downMessageId: text("down_message_id"),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [primaryKey({ columns: [t.userId, t.deviceId, t.sessionId] })],
+);
