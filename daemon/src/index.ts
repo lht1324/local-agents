@@ -9,6 +9,8 @@ import { syncSessions } from "./sessions";
 import { syncCatalog } from "./catalog";
 import { backfillMissing, syncCurrentSessions, syncMessages } from "./messages";
 import { startSubscription, type BusEvent } from "./subscribe";
+import { downloadSession, linkSession, listShared, shareSession, syncShared, uploadSession } from "./rawsync";
+import { queueNotice } from "./notice";
 import { checkboxPick, dumpTab, listVersions, pullVersion, pushTabs, syncOneTab } from "./handoff";
 import {
     countAll,
@@ -264,6 +266,65 @@ async function onPull(): Promise<void> {
         console.log(applied.created ? `Created new tab ${applied.title} in ${dir}.` : `Updated local tab ${applied.title} (${dir}).`);
         console.log(`Done: ${applied.messages} messages, ${applied.parts} parts applied.`);
     }
+}
+
+// 로컬 세션 하나를 고른다. 공유 시작(share)에서 쓴다.
+async function pickLocalSession(server: DiscoveredServer, prompt: string): Promise<string | null> {
+    const body = (await apiGet(server, "/session")) as
+        | { data?: { id: string; title?: string }[] }
+        | { id: string; title?: string }[];
+    const list = (Array.isArray(body) ? body : (body.data ?? [])).filter((item) => typeof item.id === "string");
+    if (list.length === 0) {
+        console.log("no sessions.");
+        return null;
+    }
+    console.log(prompt);
+    const picked = await checkboxPick(
+        list.map((item) => item.title ?? item.id.slice(0, 12)),
+        [],
+    );
+    return picked.length > 0 ? list[picked[0]].id : null;
+}
+
+// 이 세션을 공유 세션으로 등록하고, 이 기기를 연동한다. 최초 전체 업로드까지 수행.
+async function onShare(arg?: string): Promise<void> {
+    await ensureAuth();
+    const server = await ensureServer();
+    const sessionId = arg && arg.length > 0 ? arg : await pickLocalSession(server, "Pick a session to share");
+    if (!sessionId) {
+        console.log("Nothing picked.");
+        return;
+    }
+    await shareSession(sessionId);
+    const uploaded = await uploadSession(sessionId, true);
+    console.log(`shared ${sessionId.slice(0, 12)} — uploaded ${uploaded} messages.`);
+    console.log("this device is linked. on another PC: localagents link");
+}
+
+// 공유 세션에 이 기기를 연동하고, 최초 전체 다운로드/적용까지 수행.
+async function onLink(arg?: string): Promise<void> {
+    await ensureAuth();
+    const shared = await listShared();
+    let sessionId = arg && arg.length > 0 ? arg : null;
+    if (!sessionId) {
+        if (shared.length === 0) {
+            console.log("no shared sessions. run `localagents share` on the other PC first.");
+            return;
+        }
+        const picked = await checkboxPick(
+            shared.map((item) => `${item.title ?? item.sessionId.slice(0, 12)} (${item.updatedAt ?? "no data"})`),
+            [],
+        );
+        if (picked.length === 0) {
+            console.log("Nothing picked.");
+            return;
+        }
+        sessionId = shared[picked[0]].sessionId;
+    }
+    await linkSession(sessionId);
+    const result = await downloadSession(sessionId, null);
+    console.log(`linked ${sessionId.slice(0, 12)} — applied ${result.applied} messages.`);
+    console.log("open the session in OpenCode. if it is not listed, reopen the app.");
 }
 
 // 작업폴더 확정. 자동 매칭 → 새로/기존 → 선택기/clone/검증.
@@ -856,39 +917,38 @@ async function onRun(): Promise<void> {
     } catch (err) {
         console.error(`server ensure failed: ${err instanceof Error ? err.message : err}`);
     }
+    // 공유 세션 raw 동기화. 이벤트가 몰리면 400ms 안에서 한 번만 실행한다.
+    let sharedSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSharedSync = (reason: string): void => {
+        if (sharedSyncTimer) {
+            clearTimeout(sharedSyncTimer);
+        }
+        sharedSyncTimer = setTimeout(() => {
+            sharedSyncTimer = null;
+            void (async () => {
+                try {
+                    const result = await syncShared();
+                    for (const item of result.applied) {
+                        queueNotice(item.sessionId, item.messages);
+                        console.log(`sync(${reason}): ${item.title ?? item.sessionId.slice(0, 12)} +${item.messages}`);
+                    }
+                } catch {
+                    // 다음 주기가 잡는다.
+                }
+            })();
+        }, 400);
+    };
     // 알림 버스 구독. 폴링은 안전망으로 그대로 두고 즉시성만 더한다.
-    // 같은 탭 이벤트가 몰리면 400ms 안에서 한 번으로 합친다.
-    const pendingTabSync = new Map<string, ReturnType<typeof setTimeout>>();
     const stopSubscription = startSubscription((event: BusEvent) => {
-        if (event.kind === "message" && event.tabId) {
-            const tabId = event.tabId;
-            const existing = pendingTabSync.get(tabId);
-            if (existing) {
-                clearTimeout(existing);
-            }
-            pendingTabSync.set(
-                tabId,
-                setTimeout(() => {
-                    pendingTabSync.delete(tabId);
-                    void (async () => {
-                        try {
-                            const server = await ensureServer();
-                            // 지금은 인계(R2) 경로로 받는다. raw 동기화가 들어오면 이 자리가
-                            // "커서 이후 행을 Neon에서 받아 로컬 DB에 적용"으로 바뀐다.
-                            await autoPull(server);
-                            console.log(`ws: pulled ${tabId.slice(0, 12)}`);
-                        } catch {
-                            // 다음 폴링이 잡는다.
-                        }
-                    })();
-                }, 400),
-            );
+        if (event.kind === "log") {
+            scheduleSharedSync("ws");
             return;
         }
         if (event.kind === "command") {
             void pollCommands().catch(() => undefined);
         }
     });
+    let fastTick = 0;
     while (!stopping) {
         const now = Date.now();
         // 느린 층: 플랜 주기. heartbeat·거울·카탈로그·안전망. 무겁다.
@@ -945,6 +1005,11 @@ async function onRun(): Promise<void> {
                 console.error(`poll failed: ${err instanceof Error ? err.message : err}`);
             }
         }
+        // 공유 세션은 30초에 한 번 안전망으로 동기화한다 (WS 이벤트가 오면 즉시 앞당긴다).
+        fastTick += 1;
+        if (fastTick % 3 === 0) {
+            scheduleSharedSync("poll");
+        }
         // 막힌 상태에서는 요청을 줄인다 (하트비트는 유지해 온라인 표시는 계속).
         const deadline = Date.now() + (blocked ? 60000 : 10000);
         while (!stopping && Date.now() < deadline) {
@@ -952,8 +1017,8 @@ async function onRun(): Promise<void> {
         }
     }
     stopSubscription();
-    for (const timer of pendingTabSync.values()) {
-        clearTimeout(timer);
+    if (sharedSyncTimer) {
+        clearTimeout(sharedSyncTimer);
     }
     try {
         await onHeartbeat();
@@ -1001,8 +1066,10 @@ Commands:
   logout      Revoke this device and stop background sync
   status      Show device, OpenCode server, last sync, pending commands, plan
   whoami      Show the signed-in account
-  push        Upload selected sessions to the cloud
-  pull        Download sessions from another PC
+  share       Start sharing a session (upload once, then auto-sync)
+  link        Link this PC to a shared session (download once, then auto-sync)
+  push        Upload selected sessions to the cloud (legacy)
+  pull        Download sessions from another PC (legacy)
   uninstall   Remove the background service, files and saved state
 
 Options:
@@ -1082,6 +1149,10 @@ async function main(): Promise<void> {
         await onSyncModels();
     } else if (cmd === "sync-sessions") {
         await onSyncSessions();
+    } else if (cmd === "share") {
+        await onShare(args[1]);
+    } else if (cmd === "link") {
+        await onLink(args[1]);
     } else if (cmd === "push") {
         await onPush(args.slice(1));
     } else if (cmd === "pull") {

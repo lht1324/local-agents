@@ -904,3 +904,175 @@ export function readEpochRows(sessionID: string): ServerMessage[] {
         db.close();
     }
 }
+
+// ── raw 동기화 ────────────────────────────────────────────────
+// 클라우드(session_message)와 로컬 SQLite 사이의 원본 행 이동.
+// seq는 로컬 값이라 내보내지 않고, 받을 때 새로 부여한다.
+
+export interface RawMessageRow {
+    id: string;
+    type: string;
+    createdAt: number;
+    updatedAt: number | null;
+    data: string;
+}
+
+export interface RawPartRow {
+    id: string;
+    messageId: string;
+    createdAt: number;
+    updatedAt: number | null;
+    data: string;
+}
+
+export function readRawMessages(
+    sessionId: string,
+    since?: { timeCreated: number; id: string } | null,
+): RawMessageRow[] {
+    const path = dbPath();
+    if (!path) {
+        return [];
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        let query =
+            "SELECT id, type, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ?";
+        const params: unknown[] = [sessionId];
+        if (since) {
+            query += " AND (time_created > ? OR (time_created = ? AND id > ?))";
+            params.push(since.timeCreated, since.timeCreated, since.id);
+        }
+        query += " ORDER BY time_created ASC, id ASC";
+        const rows = db.prepare(query).all(...params) as { id: string; type: string; createdAt: number; updatedAt: number | null; data: string }[];
+        return rows.map((r) => ({ ...r, createdAt: r.createdAt ?? 0 }));
+    } catch {
+        return [];
+    } finally {
+        db.close();
+    }
+}
+
+export function readRawParts(sessionId: string, messageIds: string[]): RawPartRow[] {
+    if (messageIds.length === 0) {
+        return [];
+    }
+    const path = dbPath();
+    if (!path) {
+        return [];
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        const marks = messageIds.map(() => "?").join(",");
+        const rows = db
+            .prepare(
+                `SELECT id, message_id AS messageId, time_created AS createdAt, time_updated AS updatedAt, data FROM part WHERE session_id = ? AND message_id IN (${marks})`,
+            )
+            .all(sessionId, ...messageIds) as { id: string; messageId: string; createdAt: number; updatedAt: number | null; data: string }[];
+        return rows.map((r) => ({ ...r, createdAt: r.createdAt ?? 0 }));
+    } catch {
+        return [];
+    } finally {
+        db.close();
+    }
+}
+
+export interface SessionStateRow {
+    title: string | null;
+    directory: string | null;
+    agent: string | null;
+    model: string | null;
+    revert: string | null;
+    parentId: string | null;
+    updatedAt: number;
+}
+
+export function readSessionState(sessionId: string): SessionStateRow | null {
+    const path = dbPath();
+    if (!path) {
+        return null;
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        const v2 = db
+            .prepare("SELECT title, directory, parent_id AS parentId, agent, model, revert, time_updated AS updatedAt FROM session_v2 WHERE id = ?")
+            .get(sessionId) as { title: string | null; directory: string | null; parentId: string | null; agent: string | null; model: string | null; revert: string | null; updatedAt: number } | undefined;
+        const v1 = db
+            .prepare("SELECT title, directory, agent, model, revert, time_updated AS updatedAt FROM session WHERE id = ?")
+            .get(sessionId) as { title: string | null; directory: string | null; agent: string | null; model: string | null; revert: string | null; updatedAt: number } | undefined;
+        const row = v2 ?? v1;
+        if (!row) {
+            return null;
+        }
+        return {
+            title: row.title ?? null,
+            directory: row.directory ?? null,
+            agent: row.agent ?? null,
+            model: row.model ?? null,
+            revert: (row as { revert?: string | null }).revert ?? null,
+            parentId: (row as { parentId?: string | null }).parentId ?? null,
+            updatedAt: row.updatedAt ?? 0,
+        };
+    } catch {
+        return null;
+    } finally {
+        db.close();
+    }
+}
+
+// 받은 상태(제목/모델/revert)를 로컬 세션에 반영한다. 존재하는 표만 건드린다.
+export function applySessionState(
+    sessionId: string,
+    state: { title?: string | null; agent?: string | null; model?: string | null; revert?: string | null },
+): void {
+    const path = dbPath();
+    if (!path) {
+        return;
+    }
+    const db = openSqlite(path);
+    try {
+        const now = Date.now();
+        const columns = (table: string): Set<string> => {
+            try {
+                return new Set((db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map((r) => r.name));
+            } catch {
+                return new Set();
+            }
+        };
+        for (const table of ["session", "session_v2"]) {
+            const cols = columns(table);
+            if (cols.size === 0) {
+                continue;
+            }
+            const sets: string[] = [];
+            const params: unknown[] = [];
+            if (cols.has("title") && state.title != null) {
+                sets.push("title = ?");
+                params.push(state.title);
+            }
+            if (cols.has("agent") && state.agent != null) {
+                sets.push("agent = ?");
+                params.push(state.agent);
+            }
+            if (cols.has("model") && state.model != null) {
+                sets.push("model = ?");
+                params.push(state.model);
+            }
+            if (cols.has("revert")) {
+                sets.push("revert = ?");
+                params.push(state.revert ?? null);
+            }
+            if (cols.has("time_updated")) {
+                sets.push("time_updated = ?");
+                params.push(now);
+            }
+            if (sets.length === 0) {
+                continue;
+            }
+            db.prepare(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`).run(...params, sessionId);
+        }
+    } catch {
+        // 다음 동기화가 다시 시도한다.
+    } finally {
+        db.close();
+    }
+}

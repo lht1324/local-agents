@@ -43,6 +43,10 @@ app.use("/api/*", async (c, next) => {
     if (c.req.method === "PUT" && c.req.path.endsWith("/upload")) {
         return next();
     }
+    // raw 동기화는 개별 메시지가 수 MB(이미지 포함)일 수 있다. 16MB까지 받는다.
+    if (c.req.path.includes("/session-messages")) {
+        return bodyLimit(16 * 1024 * 1024)(c, next);
+    }
     return bodyLimit()(c, next);
 });
 
