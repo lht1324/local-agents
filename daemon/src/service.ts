@@ -2,13 +2,20 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { baseUrl } from "./device";
 
 // 상주 데몬을 OS 사용자 서비스로 등록한다. sudo가 필요 없다.
 // npx로 실행하면 패키지가 임시 캐시(~/.npm/_npx/<hash>)에 있어 언제 사라질지 모른다.
 // 그래서 실행 파일을 안정된 경로로 복사한 뒤 그 경로를 서비스가 가리키게 한다.
 
-const UNIT = "localagents.service";
-const MAC_LABEL = "link.localagents.daemon";
+// 환경마다 서비스가 따로 있어야 dev와 prod가 충돌하지 않는다.
+// 실행 경로로 환경을 판정한다 (device.ts:baseUrl 과 같은 규칙).
+const BASE_URL = baseUrl();
+const IS_DEV = BASE_URL !== "https://localagents.link";
+const ENV_SUFFIX = IS_DEV ? "-dev" : "";
+const UNIT = `localagents${ENV_SUFFIX}.service`;
+const MAC_LABEL = IS_DEV ? "link.localagents.dev.daemon" : "link.localagents.daemon";
+const APP_NAME = `localagents${ENV_SUFFIX}`;
 // OpenCode가 읽는 플러그인. 이 파일이 있어야 이벤트 기반 즉시 동기화가 동작한다.
 const PLUGIN_FILE = "localagents-sync.js";
 
@@ -18,11 +25,11 @@ export interface ServiceResult {
 }
 
 function appDir(): string {
-    return join(homedir(), ".local", "share", "localagents", "app");
+    return join(homedir(), ".local", "share", APP_NAME, "app");
 }
 
 function shimPath(): string {
-    return join(homedir(), ".local", "bin", "localagents");
+    return join(homedir(), ".local", "bin", APP_NAME);
 }
 
 function unitPath(): string {
@@ -200,13 +207,14 @@ export function removeShellPath(): void {
 function systemdUnit(): string {
     // EnvironmentFile은 앞에 '-'를 붙여 없어도 실패하지 않게 한다.
     return `[Unit]
-Description=localagents resident daemon
+Description=localagents resident daemon (${IS_DEV ? "dev" : "prod"})
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart="${shimPath()}" run
+Environment=LOCALAGENTS_BASE_URL=${BASE_URL}
 EnvironmentFile=-%h/.config/localagents/env
 KillMode=process
 Restart=on-failure
@@ -228,10 +236,14 @@ function launchAgentPlist(): string {
         <string>${shimPath()}</string>
         <string>run</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LOCALAGENTS_BASE_URL</key><string>${BASE_URL}</string>
+    </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>${join(homedir(), ".local", "state", "localagents", "daemon.log")}</string>
-    <key>StandardErrorPath</key><string>${join(homedir(), ".local", "state", "localagents", "daemon.log")}</string>
+    <key>StandardOutPath</key><string>${join(homedir(), ".local", "state", APP_NAME, "daemon.log")}</string>
+    <key>StandardErrorPath</key><string>${join(homedir(), ".local", "state", APP_NAME, "daemon.log")}</string>
 </dict>
 </plist>
 `;
@@ -253,7 +265,7 @@ export function installService(): ServiceResult {
     if (os === "darwin") {
         const dir = dirname(plistPath());
         mkdirSync(dir, { recursive: true });
-        mkdirSync(join(homedir(), ".local", "state", "localagents"), { recursive: true });
+        mkdirSync(join(homedir(), ".local", "state", APP_NAME), { recursive: true });
         writeFileSync(plistPath(), launchAgentPlist());
         const uid = typeof process.getuid === "function" ? process.getuid() : 501;
         run("launchctl", ["bootout", `gui/${uid}/${MAC_LABEL}`]);
@@ -262,7 +274,7 @@ export function installService(): ServiceResult {
             return { ok: false, message: `launchctl bootstrap failed: ${loaded.out}` };
         }
         const hint = ensureShellPath();
-        return { ok: true, message: `background service installed (launchd)${hint ? `. ${hint}` : ""}` };
+        return { ok: true, message: `background service installed (launchd${IS_DEV ? ", dev" : ""})${hint ? `. ${hint}` : ""}` };
     }
 
     mkdirSync(dirname(unitPath()), { recursive: true });
@@ -276,7 +288,7 @@ export function installService(): ServiceResult {
         return { ok: false, message: `systemctl --user enable failed: ${enabled.out}` };
     }
     const hint = ensureShellPath();
-    return { ok: true, message: `background service installed (systemd user)${hint ? `. ${hint}` : ""}` };
+    return { ok: true, message: `background service installed (systemd user${IS_DEV ? ", dev" : ""})${hint ? `. ${hint}` : ""}` };
 }
 
 // 로그아웃용. 유닛은 남겨두고 프로세스만 멈춘다 (재로그인하면 다시 켜진다).
@@ -317,8 +329,33 @@ export function uninstallService(): ServiceResult {
     } catch {
         // 무시
     }
-    removePlugin();
-    removeShellPath();
+    // 플러그인과 PATH 블록은 dev/prod가 공유한다. prod 제거 때만 정리한다.
+    if (!IS_DEV) {
+        removePlugin();
+        removeShellPath();
+    }
     rmSync(appDir(), { recursive: true, force: true });
     return { ok: true, message: "background service and installed files removed" };
+}
+
+// 이 환경(dev/prod)의 상주 서비스가 살아 있는지.
+export function isServiceActive(): boolean {
+    const os = platform();
+    if (os === "darwin") {
+        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        return run("launchctl", ["print", `gui/${uid}/${MAC_LABEL}`]).ok;
+    }
+    if (os === "linux") {
+        const res = run("systemctl", ["--user", "is-active", UNIT]);
+        return res.ok && res.out.trim() === "active";
+    }
+    return false;
+}
+
+// 상주 서비스가 없으면 설치해서 켠다. share/link가 "이제부터 자동"을 보장한다.
+export function ensureService(): ServiceResult {
+    if (isServiceActive()) {
+        return { ok: true, message: `background sync already running (${IS_DEV ? "dev" : "prod"})` };
+    }
+    return installService();
 }

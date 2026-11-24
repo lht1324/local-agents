@@ -2,7 +2,7 @@
 import { apiGet, discoverServer, type DiscoveredServer } from "./server";
 import { cloudGet } from "./cloud";
 import { hostInfo, readState, writeState, baseUrl, clearState } from "./device";
-import { installPlugin, installService, stopService, uninstallService } from "./service";
+import { ensureService, installPlugin, installService, stopService, uninstallService } from "./service";
 import { forkAndRegister } from "./fork";
 import { ensureServer, killOwned, type ManagedServer } from "./serve";
 import { syncSessions } from "./sessions";
@@ -298,6 +298,8 @@ async function onShare(arg?: string): Promise<void> {
     await shareSession(sessionId);
     const uploaded = await uploadSession(sessionId, true);
     console.log(`shared ${sessionId.slice(0, 12)} — uploaded ${uploaded} messages.`);
+    const service = ensureService();
+    console.log(service.message);
     console.log("this device is linked. on another PC: localagents link");
 }
 
@@ -324,6 +326,8 @@ async function onLink(arg?: string): Promise<void> {
     await linkSession(sessionId);
     const result = await downloadSession(sessionId, null);
     console.log(`linked ${sessionId.slice(0, 12)} — applied ${result.applied} messages.`);
+    const service = ensureService();
+    console.log(service.message);
     console.log("open the session in OpenCode. if it is not listed, reopen the app.");
 }
 
