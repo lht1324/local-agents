@@ -268,6 +268,18 @@ async function onPull(): Promise<void> {
     }
 }
 
+// 1회성 share/link 진행률. n/전체만 보여준다.
+function putCount(label: string, done: number, total: number | null): void {
+    const width = 30;
+    if (total && total > 0) {
+        const pct = Math.min(100, Math.round((done / total) * 100));
+        const filled = Math.round((pct / 100) * width);
+        process.stdout.write(`\r  ${label} [${"#".repeat(filled)}${"-".repeat(width - filled)}] ${done}/${total}`);
+        return;
+    }
+    process.stdout.write(`\r  ${label} ${done}`);
+}
+
 // 로컬 세션 하나를 고른다. 공유 시작(share)에서 쓴다.
 async function pickLocalSession(server: DiscoveredServer, prompt: string): Promise<string | null> {
     const body = (await apiGet(server, "/session")) as
@@ -296,7 +308,10 @@ async function onShare(arg?: string): Promise<void> {
         return;
     }
     await shareSession(sessionId);
-    const uploaded = await uploadSession(sessionId, true);
+    const uploaded = await uploadSession(sessionId, true, (done, total) =>
+        putCount(`sharing ${sessionId.slice(0, 12)}`, done, total),
+    );
+    process.stdout.write("\n");
     console.log(`shared ${sessionId.slice(0, 12)} — uploaded ${uploaded} messages.`);
     const service = ensureService();
     console.log(service.message);
@@ -324,7 +339,10 @@ async function onLink(arg?: string): Promise<void> {
         sessionId = shares[picked[0]].sessionId;
     }
     await linkSession(sessionId);
-    const result = await downloadSession(sessionId, null);
+    const result = await downloadSession(sessionId, null, 1_000, (done, total) =>
+        putCount(`linking ${sessionId.slice(0, 12)}`, done, total),
+    );
+    process.stdout.write("\n");
     console.log(`linked ${sessionId.slice(0, 12)} — applied ${result.applied} messages.`);
     const service = ensureService();
     console.log(service.message);

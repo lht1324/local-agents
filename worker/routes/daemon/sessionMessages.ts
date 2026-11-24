@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { checkBillingGate } from "../../../lib/billing";
 import { getDb } from "../../../lib/neon/client";
 import { deviceCursors, sessionLinks, sessionMessages, sessionParts, sessionShares, sessionState } from "../../../lib/neon/schema";
@@ -259,6 +259,16 @@ daemonLog.get("/", async (c) => {
               )
             : undefined;
 
+    // 전체 다운로드(커서 없음)일 때만 총 개수를 함께 준다. 진행률 표시에 쓴다.
+    const isFull = !(sinceTime > 0 || sinceId.length > 0);
+    const totalRows = isFull
+        ? await db
+              .select({ n: count() })
+              .from(sessionMessages)
+              .where(and(eq(sessionMessages.userId, userId), eq(sessionMessages.sessionId, sessionId)))
+        : [];
+    const total = isFull ? Number(totalRows[0]?.n ?? 0) : null;
+
     const messages = await db
         .select({
             id: sessionMessages.id,
@@ -333,6 +343,7 @@ daemonLog.get("/", async (c) => {
             parts,
             state,
             hasMore: messages.length === limit,
+            total,
             nextCursor: last ? { timeCreated: last.timeCreated, id: last.id } : null,
         },
     });

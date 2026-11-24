@@ -79,7 +79,11 @@ async function uploadWatermark(sessionId: string): Promise<{ timeCreated: number
 }
 
 // 로컬 행을 클라우드로 올린다. full=true면 처음부터 전부.
-export async function uploadSession(sessionId: string, full = false): Promise<number> {
+export async function uploadSession(
+    sessionId: string,
+    full = false,
+    onProgress?: (done: number, total: number) => void,
+): Promise<number> {
     const watermark = full ? null : await uploadWatermark(sessionId);
     const rows = readRawMessages(sessionId, watermark);
     const state = readSessionState(sessionId);
@@ -87,6 +91,7 @@ export async function uploadSession(sessionId: string, full = false): Promise<nu
         return 0;
     }
     let sent = 0;
+    const totalRows = rows.length;
     let batch: RawRow[] = [];
     let bytes = 0;
 
@@ -115,6 +120,7 @@ export async function uploadSession(sessionId: string, full = false): Promise<nu
         sent += batch.length;
         batch = [];
         bytes = 0;
+        onProgress?.(sent, totalRows);
     };
 
     for (const row of rows) {
@@ -149,6 +155,7 @@ interface LogResponse {
         updatedAt: number;
     } | null;
     hasMore: boolean;
+    total: number | null;
     nextCursor: { timeCreated: number; id: string } | null;
 }
 
@@ -158,10 +165,12 @@ export async function downloadSession(
     cursor: { timeCreated: number; id: string } | null,
     // 안전 상한일 뿐이다. 200행/페이지 × 1,000 = 20만 행까지 받는다.
     maxPages = 1_000,
+    onProgress?: (done: number, total: number | null) => void,
 ): Promise<{ applied: number; title: string | null }> {
     let current = cursor;
     let applied = 0;
     let title: string | null = null;
+    let total: number | null = null;
 
     for (let page = 0; page < maxPages; page += 1) {
         const qs = new URLSearchParams({ sessionId, limit: "200" });
@@ -176,6 +185,9 @@ export async function downloadSession(
         }
         if (data.state?.title) {
             title = data.state.title;
+        }
+        if (typeof data.total === "number") {
+            total = data.total;
         }
         if (data.state?.deletedAt) {
             // 원격에서 삭제된 세션은 로컬 데이터를 건드리지 않는다 (복구 여지를 남긴다).
@@ -220,6 +232,7 @@ export async function downloadSession(
                 });
             }
             applied += data.messages.length;
+            onProgress?.(applied, total);
         } else if (data.state) {
             applySessionState(sessionId, {
                 title: data.state.title,
@@ -229,9 +242,6 @@ export async function downloadSession(
             });
         }
         current = data.nextCursor ?? current;
-        if (page > 0 && page % 10 === 0) {
-            console.log(`  ${sessionId.slice(0, 12)}: ${applied} messages applied...`);
-        }
         if (!data.hasMore) {
             return { applied, title };
         }
