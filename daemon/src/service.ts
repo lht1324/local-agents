@@ -269,7 +269,13 @@ export function installService(): ServiceResult {
         writeFileSync(plistPath(), launchAgentPlist());
         const uid = typeof process.getuid === "function" ? process.getuid() : 501;
         run("launchctl", ["bootout", `gui/${uid}/${MAC_LABEL}`]);
-        const loaded = run("launchctl", ["bootstrap", `gui/${uid}`, plistPath()]);
+        // bootout 직후 bootstrap은 launchd가 라벨을 아직 놓지 않아 EIO(5)로 실패할 수 있다.
+        // 짧게 재시도한다.
+        let loaded = run("launchctl", ["bootstrap", `gui/${uid}`, plistPath()]);
+        for (let attempt = 0; !loaded.ok && attempt < 5; attempt += 1) {
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+            loaded = run("launchctl", ["bootstrap", `gui/${uid}`, plistPath()]);
+        }
         if (!loaded.ok) {
             return { ok: false, message: `launchctl bootstrap failed: ${loaded.out}` };
         }
