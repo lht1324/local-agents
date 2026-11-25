@@ -4,6 +4,7 @@ import {
     applyTabPackageUpsert,
     readRawMessages,
     readRawParts,
+    readRecentMessages,
     readSessionState,
     type TabPackage,
 } from "./localdb";
@@ -93,9 +94,17 @@ export async function uploadSession(
     sessionId: string,
     full = false,
     onProgress?: (done: number, total: number) => void,
+    repairLimit?: number,
 ): Promise<number> {
     const watermark = full ? null : await uploadWatermark(sessionId);
-    const candidates = readRawMessages(sessionId, watermark);
+    const afterMark = readRawMessages(sessionId, watermark);
+    let candidates = afterMark;
+    if (repairLimit) {
+        // 워터마크가 앞서가며 놓친 행(중단된 답변 등)을 최근 N행에서 복구한다.
+        const seen = new Set(afterMark.map((row) => row.id));
+        const recent = readRecentMessages(sessionId, repairLimit).filter((row) => !seen.has(row.id));
+        candidates = [...afterMark, ...recent];
+    }
     // AI 답변은 스트리밍 중 계속 갱신된다. 완료된 답변만, 또는 60초 이상 멈춘 것만 보낸다.
     const now = Date.now();
     const rows = candidates.filter((row) => {
@@ -275,13 +284,13 @@ export interface SyncResult {
 }
 
 // 연동된 공유 세션 전체를 한 번 동기화한다. (올린 뒤 받는다)
-export async function syncShared(): Promise<SyncResult> {
+export async function syncShared(options?: { repairLimit?: number }): Promise<SyncResult> {
     const shared = await listShared();
     let uploaded = 0;
     const applied: SyncResult["applied"] = [];
     for (const session of shared) {
         try {
-            uploaded += await uploadSession(session.sessionId);
+            uploaded += await uploadSession(session.sessionId, false, undefined, options?.repairLimit);
         } catch {
             // 다음 주기가 잡는다
         }

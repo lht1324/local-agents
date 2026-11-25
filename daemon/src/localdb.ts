@@ -1078,3 +1078,24 @@ export function applySessionState(
         db.close();
     }
 }
+
+// 최근 N행. 시작 시 복구 스윕에 쓴다 (중단된 답변이 워터마크 뒤로 밀린 경우).
+export function readRecentMessages(sessionId: string, limit: number): RawMessageRow[] {
+    const path = dbPath();
+    if (!path) {
+        return [];
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        const rows = db
+            .prepare(
+                "SELECT id, type, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT ?",
+            )
+            .all(sessionId, limit) as { id: string; type: string; createdAt: number; updatedAt: number | null; data: string }[];
+        return rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt ?? 0 }));
+    } catch {
+        return [];
+    } finally {
+        db.close();
+    }
+}

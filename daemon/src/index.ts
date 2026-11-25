@@ -941,6 +941,8 @@ async function onRun(): Promise<void> {
     }
     // 공유 세션 raw 동기화. 이벤트가 몰리면 400ms 안에서 한 번만 실행한다.
     let sharedSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    // 프로세스 시작 후 첫 동기화에서 최근 200행을 복구한다.
+    let repairPending = true;
     const scheduleSharedSync = (reason: string): void => {
         if (sharedSyncTimer) {
             clearTimeout(sharedSyncTimer);
@@ -949,7 +951,8 @@ async function onRun(): Promise<void> {
             sharedSyncTimer = null;
             void (async () => {
                 try {
-                    const result = await syncShared();
+                    const result = await syncShared(repairPending ? { repairLimit: 200 } : undefined);
+                    repairPending = false;
                     for (const item of result.applied) {
                         queueNotice(item.sessionId, item.messages);
                         console.log(`sync(${reason}): ${item.title ?? item.sessionId.slice(0, 12)} +${item.messages}`);
