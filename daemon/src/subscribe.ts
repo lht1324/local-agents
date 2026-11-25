@@ -14,6 +14,7 @@ export function startSubscription(onEvent: (event: BusEvent) => void): () => voi
     let stopped = false;
     let socket: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let ping: ReturnType<typeof setInterval> | null = null;
     let attempt = 0;
 
     const schedule = (): void => {
@@ -36,6 +37,18 @@ export function startSubscription(onEvent: (event: BusEvent) => void): () => voi
         ws.onopen = () => {
             attempt = 0;
             console.log("ws: connected");
+            // 유휴 연결이 프록시에서 끊기지 않게 25초마다 핑을 보낸다.
+            // 서버(DO)는 auto-response로 응답하므로 과금 없이 유지된다.
+            if (ping) {
+                clearInterval(ping);
+            }
+            ping = setInterval(() => {
+                try {
+                    ws.send("ping");
+                } catch {
+                    // onclose가 정리한다.
+                }
+            }, 25_000);
         };
         ws.onmessage = (event) => {
             let data: (BusEvent & { type?: string }) | null = null;
@@ -54,6 +67,10 @@ export function startSubscription(onEvent: (event: BusEvent) => void): () => voi
             }
         };
         ws.onclose = () => {
+            if (ping) {
+                clearInterval(ping);
+                ping = null;
+            }
             if (socket === ws) {
                 socket = null;
             }
@@ -70,6 +87,9 @@ export function startSubscription(onEvent: (event: BusEvent) => void): () => voi
         stopped = true;
         if (timer) {
             clearTimeout(timer);
+        }
+        if (ping) {
+            clearInterval(ping);
         }
         socket?.close();
     };

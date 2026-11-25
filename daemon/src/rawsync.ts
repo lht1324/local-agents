@@ -40,6 +40,16 @@ interface RawPart {
     data: string;
 }
 
+// assistant 행의 data에 time.completed가 있으면 완료된 답변이다.
+function isFinished(data: string): boolean {
+    try {
+        const parsed = JSON.parse(data) as { time?: { completed?: unknown } };
+        return typeof parsed?.time?.completed === "number";
+    } catch {
+        return true;
+    }
+}
+
 // 한 요청이 Worker 본문 제한(2MB)을 넘지 않도록 나눈다.
 // JSON으로 감싸면 따옴표/개행이 이스케이프되어 커진다. 2MB 한도에 여유를 둔다.
 const CHUNK_BYTES = 600_000;
@@ -71,10 +81,10 @@ export async function linkSession(sessionId: string): Promise<void> {
     await cloudPost("/api/daemon/session-messages/link", { sessionId });
 }
 
-async function uploadWatermark(sessionId: string): Promise<{ timeCreated: number; id: string } | null> {
+async function uploadWatermark(sessionId: string): Promise<{ timeCreated: number; id: string; timeUpdated: number } | null> {
     const body = (await cloudGet(
         `/api/daemon/session-messages/watermark?sessionId=${encodeURIComponent(sessionId)}`,
-    )) as { data?: { timeCreated: number; id: string } | null };
+    )) as { data?: { timeCreated: number; id: string; timeUpdated: number } | null };
     return body.data ?? null;
 }
 
@@ -85,7 +95,15 @@ export async function uploadSession(
     onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
     const watermark = full ? null : await uploadWatermark(sessionId);
-    const rows = readRawMessages(sessionId, watermark);
+    const candidates = readRawMessages(sessionId, watermark);
+    // AI 답변은 스트리밍 중 계속 갱신된다. 완료된 답변만, 또는 60초 이상 멈춘 것만 보낸다.
+    const now = Date.now();
+    const rows = candidates.filter((row) => {
+        if (row.type !== "assistant" || isFinished(row.data)) {
+            return true;
+        }
+        return now - (row.updatedAt ?? row.createdAt) > 60_000;
+    });
     const state = readSessionState(sessionId);
     if (rows.length === 0 && !state) {
         return 0;

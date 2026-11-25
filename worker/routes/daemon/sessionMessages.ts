@@ -61,23 +61,36 @@ daemonLog.get("/watermark", async (c) => {
     if (!sessionId) {
         return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
     }
+    const where = and(
+        eq(sessionMessages.userId, userId),
+        eq(sessionMessages.sessionId, sessionId),
+        eq(sessionMessages.deviceId, deviceId),
+    );
     const rows = await getDb()
         .select({ timeCreated: sessionMessages.timeCreated, id: sessionMessages.id })
         .from(sessionMessages)
-        .where(
-            and(
-                eq(sessionMessages.userId, userId),
-                eq(sessionMessages.sessionId, sessionId),
-                eq(sessionMessages.deviceId, deviceId),
-            ),
-        )
+        .where(where)
         .orderBy(desc(sessionMessages.timeCreated), desc(sessionMessages.id))
         .limit(1);
+    // 스트리밍 중 data가 바뀐 행을 다시 보내기 위한 수정 워터마크.
+    const updated = await getDb()
+        .select({
+            maxUpdated: sql<number | null>`max(coalesce(${sessionMessages.timeUpdated}, ${sessionMessages.timeCreated}))`,
+        })
+        .from(sessionMessages)
+        .where(where);
     const last = rows[0];
+    if (!last) {
+        return getBaseResponse({ success: true, status: 200, data: null });
+    }
     return getBaseResponse({
         success: true,
         status: 200,
-        data: last ? { timeCreated: last.timeCreated, id: last.id } : null,
+        data: {
+            timeCreated: last.timeCreated,
+            id: last.id,
+            timeUpdated: Number(updated[0]?.maxUpdated ?? last.timeCreated),
+        },
     });
 });
 

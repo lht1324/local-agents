@@ -927,7 +927,7 @@ export interface RawPartRow {
 
 export function readRawMessages(
     sessionId: string,
-    since?: { timeCreated: number; id: string } | null,
+    since?: { timeCreated: number; id: string; timeUpdated?: number } | null,
 ): RawMessageRow[] {
     const path = dbPath();
     if (!path) {
@@ -939,8 +939,10 @@ export function readRawMessages(
             "SELECT id, type, time_created AS createdAt, time_updated AS updatedAt, data FROM session_message WHERE session_id = ?";
         const params: unknown[] = [sessionId];
         if (since) {
-            query += " AND (time_created > ? OR (time_created = ? AND id > ?))";
-            params.push(since.timeCreated, since.timeCreated, since.id);
+            // 스트리밍 중 data가 바뀐 행(time_updated)도 다시 보낸다.
+            query +=
+                " AND (time_created > ? OR (time_created = ? AND id > ?) OR coalesce(time_updated, time_created) > ?)";
+            params.push(since.timeCreated, since.timeCreated, since.id, since.timeUpdated ?? 0);
         }
         query += " ORDER BY time_created ASC, id ASC";
         const rows = db.prepare(query).all(...params) as { id: string; type: string; createdAt: number; updatedAt: number | null; data: string }[];
