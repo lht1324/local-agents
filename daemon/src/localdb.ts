@@ -1099,3 +1099,91 @@ export function readRecentMessages(sessionId: string, limit: number): RawMessage
         db.close();
     }
 }
+
+// v2 파트. AI 답변 본문과 도구 호출이 여기에 들어간다.
+export interface RawSessionPartRow {
+    messageId: string;
+    ordinal: number;
+    type: string;
+    callId: string | null;
+    createdAt: number;
+    updatedAt: number | null;
+    data: string;
+}
+
+export function readRawSessionParts(sessionId: string, messageIds: string[]): RawSessionPartRow[] {
+    if (messageIds.length === 0) {
+        return [];
+    }
+    const path = dbPath();
+    if (!path) {
+        return [];
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        const marks = messageIds.map(() => "?").join(",");
+        const rows = db
+            .prepare(
+                `SELECT message_id AS messageId, ordinal, type, call_id AS callId, time_created AS createdAt, time_updated AS updatedAt, data FROM session_part WHERE session_id = ? AND message_id IN (${marks}) ORDER BY message_id, ordinal`,
+            )
+            .all(sessionId, ...messageIds) as {
+            messageId: string;
+            ordinal: number;
+            type: string;
+            callId: string | null;
+            createdAt: number;
+            updatedAt: number | null;
+            data: string;
+        }[];
+        return rows.map((r) => ({ ...r, createdAt: r.createdAt ?? 0 }));
+    } catch {
+        return [];
+    } finally {
+        db.close();
+    }
+}
+
+// 받은 파트를 로컬 session_part에 적용한다. 메시지 적용 뒤에 호출해야 FK가 맞는다.
+export function applySessionParts(sessionId: string, parts: RawSessionPartRow[]): number {
+    if (parts.length === 0) {
+        return 0;
+    }
+    const path = dbPath();
+    if (!path) {
+        return 0;
+    }
+    const db = openSqlite(path);
+    try {
+        const stmt = db.prepare(
+            "INSERT INTO session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id, ordinal) DO UPDATE SET type = excluded.type, call_id = excluded.call_id, time_updated = excluded.time_updated, data = excluded.data",
+        );
+        let applied = 0;
+        db.exec("BEGIN");
+        try {
+            for (const part of parts) {
+                stmt.run(
+                    part.messageId,
+                    sessionId,
+                    part.ordinal,
+                    part.type,
+                    part.callId,
+                    part.createdAt,
+                    part.updatedAt,
+                    part.data,
+                );
+                applied += 1;
+            }
+            db.exec("COMMIT");
+        } catch (error) {
+            try {
+                db.exec("ROLLBACK");
+            } catch {
+                // 무시
+            }
+            throw error;
+        }
+        return applied;
+    } finally {
+        db.close();
+    }
+}

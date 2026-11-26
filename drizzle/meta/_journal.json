@@ -176,6 +176,20 @@
       "when": 1795455874190,
       "tag": "0024_fixed_payback",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795714854105,
+      "tag": "0025_motionless_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795714876893,
+      "tag": "0026_lyrical_ben_urich",
+      "breakpoints": true
     }
   ]
 }

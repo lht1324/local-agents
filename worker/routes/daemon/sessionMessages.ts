@@ -20,8 +20,10 @@ interface RawMessage {
 }
 
 interface RawPart {
-    id?: unknown;
     messageId?: unknown;
+    ordinal?: unknown;
+    type?: unknown;
+    callId?: unknown;
     timeCreated?: unknown;
     timeUpdated?: unknown;
     data?: unknown;
@@ -165,18 +167,21 @@ daemonLog.post("/", async (c) => {
     if (parts.length > 0) {
         const rows = parts
             .map((p) => {
-                const id = str(p.id);
                 const messageId = str(p.messageId);
+                const ordinal = num(p.ordinal);
+                const type = str(p.type);
                 const data = typeof p.data === "string" ? p.data : null;
                 const timeCreated = num(p.timeCreated);
-                if (!id || !messageId || data === null || timeCreated === null) {
+                if (!messageId || ordinal === null || !type || data === null || timeCreated === null) {
                     return null;
                 }
                 return {
                     userId,
                     sessionId,
-                    id,
                     messageId,
+                    ordinal,
+                    type,
+                    callId: str(p.callId),
                     timeCreated,
                     timeUpdated: num(p.timeUpdated),
                     data,
@@ -189,10 +194,12 @@ daemonLog.post("/", async (c) => {
                 .insert(sessionParts)
                 .values(rows)
                 .onConflictDoUpdate({
-                    target: [sessionParts.sessionId, sessionParts.id],
+                    target: [sessionParts.sessionId, sessionParts.messageId, sessionParts.ordinal],
                     set: {
-                        data: excluded("data"),
+                        type: excluded("type"),
+                        callId: excluded("call_id"),
                         timeUpdated: excluded("time_updated"),
+                        data: excluded("data"),
                     },
                 });
         }
@@ -301,15 +308,17 @@ daemonLog.get("/", async (c) => {
         ids.length > 0
             ? await db
                   .select({
-                      id: sessionParts.id,
                       messageId: sessionParts.messageId,
+                      ordinal: sessionParts.ordinal,
+                      type: sessionParts.type,
+                      callId: sessionParts.callId,
                       timeCreated: sessionParts.timeCreated,
                       timeUpdated: sessionParts.timeUpdated,
                       data: sessionParts.data,
                   })
                   .from(sessionParts)
                   .where(and(eq(sessionParts.userId, userId), inArray(sessionParts.messageId, ids)))
-                  .orderBy(asc(sessionParts.timeCreated), asc(sessionParts.id))
+                  .orderBy(asc(sessionParts.messageId), asc(sessionParts.ordinal))
             : [];
 
     const stateRows = await db

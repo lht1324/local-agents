@@ -3,7 +3,8 @@ import {
     applySessionState,
     applyTabPackageUpsert,
     readRawMessages,
-    readRawParts,
+    applySessionParts,
+    readRawSessionParts,
     readRecentMessages,
     readSessionState,
     type TabPackage,
@@ -34,8 +35,10 @@ interface RawRow {
 }
 
 interface RawPart {
-    id: string;
     messageId: string;
+    ordinal: number;
+    type: string;
+    callId: string | null;
     timeCreated: number;
     timeUpdated: number | null;
     data: string;
@@ -127,7 +130,15 @@ export async function uploadSession(
             return;
         }
         const ids = batch.map((row) => row.id);
-        const parts = readRawParts(sessionId, ids);
+        const parts = readRawSessionParts(sessionId, ids).map((part) => ({
+            messageId: part.messageId,
+            ordinal: part.ordinal,
+            type: part.type,
+            callId: part.callId,
+            timeCreated: part.createdAt,
+            timeUpdated: part.updatedAt,
+            data: part.data,
+        }));
         await cloudPost("/api/daemon/session-messages", {
             sessionId,
             messages: batch,
@@ -241,15 +252,23 @@ export async function downloadSession(
                     updatedAt: m.timeUpdated,
                     data: m.data,
                 })),
-                parts: data.parts.map((p) => ({
-                    id: p.id,
-                    messageId: p.messageId,
-                    createdAt: p.timeCreated,
-                    updatedAt: p.timeUpdated,
-                    data: p.data,
-                })),
+                // v2 파트는 applySessionParts로 따로 넣는다 (여기는 v1 part 전용).
+                parts: [],
             };
             applyTabPackageUpsert(pkg, data.state?.title ?? null);
+            // AI 답변 본문은 session_part에 있다. 메시지 적용 뒤에 넣어야 FK가 맞는다.
+            applySessionParts(
+                sessionId,
+                data.parts.map((part) => ({
+                    messageId: part.messageId,
+                    ordinal: part.ordinal,
+                    type: part.type,
+                    callId: part.callId,
+                    createdAt: part.timeCreated,
+                    updatedAt: part.timeUpdated,
+                    data: part.data,
+                })),
+            );
             if (data.state) {
                 applySessionState(sessionId, {
                     title: data.state.title,

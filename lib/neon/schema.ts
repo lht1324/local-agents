@@ -243,14 +243,17 @@ export const sessionMessages = pgTable(
     ],
 );
 
-// v1 세션의 part 테이블 거울. v2는 part가 message data 안에 들어 있어 비어 있다.
+// v2 파트. AI 답변 본문/도구 호출이 message data가 아니라 여기에 들어간다.
+// 로컬 session_part와 1:1 (PK message_id+ordinal). 붙이고 떼기 쉽게 컬럼 이름을 맞췄다.
 export const sessionParts = pgTable(
     "session_part",
     {
         userId: text("user_id").notNull(),
         sessionId: text("session_id").notNull(),
-        id: text("id").notNull(),
         messageId: text("message_id").notNull(),
+        ordinal: integer("ordinal").notNull(),
+        type: text("type").notNull(),
+        callId: text("call_id"),
         timeCreated: bigint("time_created", { mode: "number" }).notNull(),
         timeUpdated: bigint("time_updated", { mode: "number" }),
         data: text("data").notNull(),
@@ -258,7 +261,7 @@ export const sessionParts = pgTable(
         receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (t) => [
-        primaryKey({ columns: [t.sessionId, t.id] }),
+        primaryKey({ columns: [t.sessionId, t.messageId, t.ordinal] }),
         index("session_part_message_idx").on(t.sessionId, t.messageId),
     ],
 );
