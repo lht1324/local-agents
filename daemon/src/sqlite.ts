@@ -41,5 +41,12 @@ function loadCtor(): DatabaseCtor {
 export function openSqlite(path: string, options?: { readOnly?: boolean }): SqliteDatabase {
     const Ctor = loadCtor();
     // 두 번째 인자에 undefined를 명시하면 ERR_INVALID_ARG_TYPE이 난다. 있을 때만 넘긴다.
-    return options ? new Ctor(path, options) : new Ctor(path);
+    const db = options ? new Ctor(path, options) : new Ctor(path);
+    try {
+        // OpenCode 앱·상주 서비스와 같은 DB를 쓴다. 쓰기 경합 시 최대 60초 기다린다.
+        db.exec("PRAGMA busy_timeout = 60000");
+    } catch {
+        // 프래그마가 실패해도 연결은 유지한다.
+    }
+    return db;
 }
