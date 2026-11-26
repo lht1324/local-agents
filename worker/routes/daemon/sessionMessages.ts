@@ -155,8 +155,10 @@ daemonLog.post("/", async (c) => {
                         timeCreated: excluded("time_created"),
                         timeUpdated: excluded("time_updated"),
                         data: excluded("data"),
-                        deviceId: excluded("device_id"),
+                        // device_id는 최초 작성 기기를 유지한다 (재업로드가 덮어쓰지 않게).
                     },
+                    // 들어온 행이 더 최신일 때만 덮어쓴다.
+                    setWhere: sql`coalesce(excluded."time_updated", excluded."time_created") > coalesce(${sessionMessages.timeUpdated}, ${sessionMessages.timeCreated})`,
                 });
             const newest = rows.reduce((acc, row) => (row.timeCreated >= acc.timeCreated ? row : acc), rows[0]);
             lastId = newest.id;
@@ -201,6 +203,7 @@ daemonLog.post("/", async (c) => {
                         timeUpdated: excluded("time_updated"),
                         data: excluded("data"),
                     },
+                    setWhere: sql`coalesce(excluded."time_updated", excluded."time_created") > coalesce(${sessionParts.timeUpdated}, ${sessionParts.timeCreated})`,
                 });
         }
     }

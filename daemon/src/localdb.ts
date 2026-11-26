@@ -743,7 +743,7 @@ export function applyTabPackageUpsert(pkg: TabPackage, fallbackTitle?: string | 
                 };
                 let seq = maxRow.maxSeq;
                 const putMsg = db.prepare(
-                    "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET type = excluded.type, data = excluded.data, time_updated = excluded.time_updated",
+                    "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET type = excluded.type, data = excluded.data, time_updated = excluded.time_updated WHERE coalesce(excluded.time_updated, excluded.time_created) > coalesce(session_message.time_updated, session_message.time_created)",
                 );
                 for (const m of writeMessages) {
                     seq += 1;
@@ -1155,7 +1155,7 @@ export function applySessionParts(sessionId: string, parts: RawSessionPartRow[])
     const db = openSqlite(path);
     try {
         const stmt = db.prepare(
-            "INSERT INTO session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id, ordinal) DO UPDATE SET type = excluded.type, call_id = excluded.call_id, time_updated = excluded.time_updated, data = excluded.data",
+            "INSERT INTO session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id, ordinal) DO UPDATE SET type = excluded.type, call_id = excluded.call_id, time_updated = excluded.time_updated, data = excluded.data WHERE coalesce(excluded.time_updated, excluded.time_created) > coalesce(session_part.time_updated, session_part.time_created)",
         );
         let applied = 0;
         db.exec("BEGIN");
