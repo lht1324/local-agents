@@ -18,6 +18,7 @@ import {
     findLocalDirByRemote,
     localRoleCounts,
     repoForDirectory,
+    readSessionState,
     sessionExists,
     setTabDirectory,
 } from "./localdb";
@@ -319,10 +320,15 @@ async function onShare(arg?: string): Promise<void> {
 }
 
 // 공유 세션에 이 기기를 연동하고, 최초 전체 다운로드/적용까지 수행.
-async function onLink(arg?: string): Promise<void> {
+// link는 기기당 한 번이다. 그래서 이 시점에 프로젝트 폴더를 항상 확정한다.
+async function onLink(arg?: string, dirArg?: string): Promise<void> {
     await ensureAuth();
     const shares = await listShares();
     let sessionId = arg && arg.length > 0 ? arg : null;
+    if (sessionId && !shares.some((item) => item.sessionId === sessionId)) {
+        console.log(`${sessionId} is not a shared session.`);
+        return;
+    }
     if (!sessionId) {
         if (shares.length === 0) {
             console.log("no shared sessions. run `localagents share` on the other PC first.");
@@ -338,21 +344,31 @@ async function onLink(arg?: string): Promise<void> {
         }
         sessionId = shares[picked[0]].sessionId;
     }
-    // 처음 받는 탭이면 프로젝트 폴더를 정한다. 이미 있으면 그 폴더를 유지한다.
+    const remoteDir = shares.find((item) => item.sessionId === sessionId)?.directory ?? null;
+    const currentDir = readSessionState(sessionId)?.directory ?? null;
     let directory: string | null = null;
-    if (!sessionExists(sessionId)) {
-        const remoteDir = shares.find((item) => item.sessionId === sessionId)?.directory ?? null;
-        if (remoteDir && isDir(remoteDir)) {
-            directory = remoteDir;
-            console.log(`using folder from the other PC: ${remoteDir}`);
-        } else {
-            const picked = await pickDirectory(remoteDir && isDir(remoteDir) ? remoteDir : null);
-            if (!picked || !isDir(picked)) {
-                console.log("no folder selected. nothing was linked.");
-                return;
-            }
-            directory = picked;
+    if (dirArg) {
+        if (!isDir(dirArg)) {
+            console.log(`not a folder: ${dirArg}. nothing was linked.`);
+            return;
         }
+        directory = dirArg;
+    } else if (process.stdin.isTTY) {
+        // 기본 위치: 지금 쓰는 폴더 → 원격 폴더 → 홈의 Projects
+        const start = currentDir && isDir(currentDir) ? currentDir : remoteDir && isDir(remoteDir) ? remoteDir : null;
+        const picked = await pickDirectory(start);
+        if (!picked || !isDir(picked)) {
+            console.log("no folder selected. nothing was linked.");
+            return;
+        }
+        directory = picked;
+    } else if (currentDir && isDir(currentDir)) {
+        directory = currentDir;
+    } else if (remoteDir && isDir(remoteDir)) {
+        directory = remoteDir;
+    } else {
+        console.log("no folder selected. nothing was linked.");
+        return;
     }
     await linkSession(sessionId);
     const result = await downloadSession(
@@ -1113,6 +1129,7 @@ Commands:
   whoami      Show the signed-in account
   share       Start sharing a session (upload once, then auto-sync)
   link        Link this PC to a shared session (download once, then auto-sync)
+              link [sessionId] [--dir <path>]
   push        Upload selected sessions to the cloud (legacy)
   pull        Download sessions from another PC (legacy)
   uninstall   Remove the background service, files and saved state
@@ -1197,7 +1214,18 @@ async function main(): Promise<void> {
     } else if (cmd === "share") {
         await onShare(args[1]);
     } else if (cmd === "link") {
-        await onLink(args[1]);
+        const rest = args.slice(1);
+        let dir: string | undefined;
+        const kept: string[] = [];
+        for (let i = 0; i < rest.length; i += 1) {
+            if (rest[i] === "--dir") {
+                dir = rest[i + 1];
+                i += 1;
+                continue;
+            }
+            kept.push(rest[i]);
+        }
+        await onLink(kept[0], dir);
     } else if (cmd === "push") {
         await onPush(args.slice(1));
     } else if (cmd === "pull") {
