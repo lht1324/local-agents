@@ -6,6 +6,7 @@ import {
     applySessionParts,
     maxLocalUpdated,
     readRawSessionParts,
+    sessionExists,
     readRecentMessages,
     readSessionState,
     type TabPackage,
@@ -342,6 +343,11 @@ export async function syncShared(options?: { repairLimit?: number }): Promise<Sy
     let uploaded = 0;
     const applied: SyncResult["applied"] = [];
     for (const session of shared) {
+        // 로컬에 없는 탭은 자동으로 만들지 않는다. 폴더 선택이 필요한 수동 link 몫이다.
+        // (GUI에서 지운 세션이 다음 동기화에 되살아나는 것을 막는다.)
+        if (!sessionExists(session.sessionId)) {
+            continue;
+        }
         // 업로드: 로컬 최신 시각이 그대로면 서버 워터마크도 물어보지 않는다.
         const localAt = maxLocalUpdated(session.sessionId);
         const prevUpload = uploadSeen.get(session.sessionId);
