@@ -55,6 +55,19 @@ function excluded(column: string) {
     return sql.raw(`excluded."${column}"`);
 }
 
+// 탭의 마지막 쓰기 버전. Neon을 조회하지 않고 DO에서 바로 답한다.
+daemonLog.get("/version", async (c) => {
+    const userId = c.get("userId");
+    const sessionId = c.req.query("sessionId");
+    if (!sessionId) {
+        return getBaseResponse({ success: false, status: 400, error: "sessionId is required" });
+    }
+    const stub = c.env.ROOMS.get(c.env.ROOMS.idFromName(userId));
+    const res = await stub.fetch(`https://room/version?sessionId=${encodeURIComponent(sessionId)}`);
+    const data = (await res.json().catch(() => null)) as { id: string; at: number } | null;
+    return getBaseResponse({ success: true, status: 200, data });
+});
+
 // 이 기기가 마지막으로 올린 위치. 첫 업로드면 null → 데몬이 전체를 보낸다.
 daemonLog.get("/watermark", async (c) => {
     const userId = c.get("userId");

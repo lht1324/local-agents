@@ -4,6 +4,7 @@ import {
     applyTabPackageUpsert,
     readRawMessages,
     applySessionParts,
+    maxLocalUpdated,
     readRawSessionParts,
     readRecentMessages,
     readSessionState,
@@ -58,9 +59,30 @@ function isFinished(data: string): boolean {
 // JSON으로 감싸면 따옴표/개행이 이스케이프되어 커진다. 2MB 한도에 여유를 둔다.
 const CHUNK_BYTES = 600_000;
 
+// 공유 목록은 자주 바뀌지 않는다. 5분 캐시로 Neon 조회를 줄인다.
+let sharedCache: { at: number; sessions: SharedSession[] } | null = null;
+const SHARED_TTL_MS = 5 * 60_000;
+
+export function invalidateSharedCache(): void {
+    sharedCache = null;
+}
+
 export async function listShared(): Promise<SharedSession[]> {
+    if (sharedCache && Date.now() - sharedCache.at < SHARED_TTL_MS) {
+        return sharedCache.sessions;
+    }
     const body = (await cloudGet("/api/daemon/session-messages/shared")) as { data?: { sessions?: SharedSession[] } };
-    return body.data?.sessions ?? [];
+    const sessions = body.data?.sessions ?? [];
+    sharedCache = { at: Date.now(), sessions };
+    return sessions;
+}
+
+// 탭의 마지막 쓰기 버전(DO가 답한다). Neon을 거치지 않는다.
+export async function remoteVersion(sessionId: string): Promise<{ id: string; at: number } | null> {
+    const body = (await cloudGet(
+        `/api/daemon/session-messages/version?sessionId=${encodeURIComponent(sessionId)}`,
+    )) as { data?: { id: string; at: number } | null };
+    return body.data ?? null;
 }
 
 export interface ShareInfo {
@@ -79,10 +101,12 @@ export async function listShares(): Promise<ShareInfo[]> {
 
 export async function shareSession(sessionId: string): Promise<void> {
     await cloudPost("/api/daemon/session-messages/share", { sessionId });
+    sharedCache = null;
 }
 
 export async function linkSession(sessionId: string): Promise<void> {
     await cloudPost("/api/daemon/session-messages/link", { sessionId });
+    sharedCache = null;
 }
 
 async function uploadWatermark(sessionId: string): Promise<{ timeCreated: number; id: string; timeUpdated: number } | null> {
@@ -204,7 +228,7 @@ export async function downloadSession(
     // 안전 상한일 뿐이다. 200행/페이지 × 1,000 = 20만 행까지 받는다.
     maxPages = 1_000,
     onProgress?: (done: number, total: number | null) => void,
-): Promise<{ applied: number; title: string | null }> {
+): Promise<{ applied: number; title: string | null; cursor: { timeCreated: number; id: string } | null }> {
     let current = cursor;
     let applied = 0;
     let title: string | null = null;
@@ -289,12 +313,12 @@ export async function downloadSession(
         }
         current = data.nextCursor ?? current;
         if (!data.hasMore) {
-            return { applied, title };
+            return { applied, title, cursor: current };
         }
     }
     // 상한에 걸린 경우 조용히 자르지 않는다. 다음 동기화가 커서부터 이어받는다.
     console.warn(`  ${sessionId.slice(0, 12)}: stopped at ${applied} messages (page cap). continuing next sync.`);
-    return { applied, title };
+    return { applied, title, cursor: current };
 }
 
 export interface SyncResult {
@@ -303,18 +327,43 @@ export interface SyncResult {
 }
 
 // 연동된 공유 세션 전체를 한 번 동기화한다. (올린 뒤 받는다)
+// 탭별로 마지막으로 본 버전/커서. 이 값이 그대로면 Neon 조회를 건너뛴다.
+const gateSeen = new Map<string, string>();
+const uploadSeen = new Map<string, number>();
+
+function cursorKey(cursor: { timeCreated: number; id: string } | null): string {
+    return cursor ? `${cursor.timeCreated}:${cursor.id}` : "-";
+}
+
 export async function syncShared(options?: { repairLimit?: number }): Promise<SyncResult> {
     const shared = await listShared();
     let uploaded = 0;
     const applied: SyncResult["applied"] = [];
     for (const session of shared) {
-        try {
-            uploaded += await uploadSession(session.sessionId, false, undefined, options?.repairLimit);
-        } catch {
-            // 다음 주기가 잡는다
+        // 업로드: 로컬 최신 시각이 그대로면 서버 워터마크도 물어보지 않는다.
+        const localAt = maxLocalUpdated(session.sessionId);
+        const prevUpload = uploadSeen.get(session.sessionId);
+        if (options?.repairLimit !== undefined || prevUpload === undefined || localAt > prevUpload) {
+            try {
+                uploaded += await uploadSession(session.sessionId, false, undefined, options?.repairLimit);
+                uploadSeen.set(session.sessionId, localAt);
+            } catch {
+                // 다음 주기가 잡는다
+            }
+        }
+        // 다운로드: DO 버전이 그대로면 Neon 조회를 건너뛴다.
+        const version = await remoteVersion(session.sessionId).catch(() => null);
+        const gate = version ? `v:${version.id}:${version.at}` : `c:${cursorKey(session.downCursor)}`;
+        if (gateSeen.get(session.sessionId) === gate) {
+            continue;
         }
         try {
             const result = await downloadSession(session.sessionId, session.downCursor);
+            session.downCursor = result.cursor;
+            gateSeen.set(
+                session.sessionId,
+                version ? `v:${version.id}:${version.at}` : `c:${cursorKey(result.cursor)}`,
+            );
             if (result.applied > 0) {
                 applied.push({ sessionId: session.sessionId, title: result.title, messages: result.applied });
             }

@@ -1187,3 +1187,24 @@ export function applySessionParts(sessionId: string, parts: RawSessionPartRow[])
         db.close();
     }
 }
+
+// 이 세션에서 가장 최근에 갱신된 행의 시각. 업로드 필요 여부를 네트워크 없이 판단한다.
+export function maxLocalUpdated(sessionId: string): number {
+    const path = dbPath();
+    if (!path) {
+        return 0;
+    }
+    const db = openSqlite(path, { readOnly: true });
+    try {
+        const row = db
+            .prepare(
+                "SELECT max(coalesce(time_updated, time_created)) AS at FROM session_message WHERE session_id = ?",
+            )
+            .get(sessionId) as { at: number | null } | undefined;
+        return row?.at ?? 0;
+    } catch {
+        return 0;
+    } finally {
+        db.close();
+    }
+}

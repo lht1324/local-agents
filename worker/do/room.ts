@@ -32,6 +32,9 @@ export class NotificationRoom implements DurableObject {
 
     async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
+        if (url.pathname === "/version") {
+            return this.version(url.searchParams.get("sessionId") ?? "");
+        }
         if (url.pathname === "/notify") {
             return this.notify(request);
         }
@@ -66,6 +69,20 @@ export class NotificationRoom implements DurableObject {
                 headers: { "content-type": "application/json" },
             });
         }
+        // 탭별 마지막 쓰기 버전을 남긴다. 데몬은 Neon 대신 이 값을 보고 조회를 건너뛴다.
+        if (event.tabId && event.id) {
+            try {
+                this.ensureSchema();
+                this.ctx.storage.sql.exec(
+                    "INSERT INTO versions (session_id, msg_id, at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET msg_id = excluded.msg_id, at = excluded.at WHERE excluded.at >= versions.at",
+                    event.tabId,
+                    event.id,
+                    event.at ?? Date.now(),
+                );
+            } catch {
+                // 버전 저장 실패가 알림을 막지 않는다.
+            }
+        }
         let delivered = 0;
         for (const ws of this.ctx.getWebSockets()) {
             // 신호를 만든 기기에는 돌려보내지 않는다 (자기 쓰기를 다시 받을 이유가 없다).
@@ -85,6 +102,31 @@ export class NotificationRoom implements DurableObject {
         return new Response(JSON.stringify({ delivered }), {
             headers: { "content-type": "application/json" },
         });
+    }
+
+    private ensureSchema(): void {
+        this.ctx.storage.sql.exec(
+            "CREATE TABLE IF NOT EXISTS versions (session_id TEXT PRIMARY KEY, msg_id TEXT, at INTEGER)",
+        );
+    }
+
+    // 탭의 마지막 쓰기 버전. 기록이 없으면 null (데몬은 안전하게 조회한다).
+    private version(sessionId: string): Response {
+        if (!sessionId) {
+            return new Response(JSON.stringify({ error: "sessionId required" }), { status: 400 });
+        }
+        try {
+            this.ensureSchema();
+            const rows = this.ctx.storage.sql
+                .exec("SELECT msg_id, at FROM versions WHERE session_id = ?", sessionId)
+                .toArray() as { msg_id: string; at: number }[];
+            const row = rows[0];
+            return new Response(JSON.stringify(row ? { id: row.msg_id, at: row.at } : null), {
+                headers: { "content-type": "application/json" },
+            });
+        } catch {
+            return new Response("null", { headers: { "content-type": "application/json" } });
+        }
     }
 
     webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer): void {
