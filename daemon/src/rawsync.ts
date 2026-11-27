@@ -228,6 +228,8 @@ export async function downloadSession(
     // 안전 상한일 뿐이다. 200행/페이지 × 1,000 = 20만 행까지 받는다.
     maxPages = 1_000,
     onProgress?: (done: number, total: number | null) => void,
+    // 처음 받는 탭은 사용자가 고른 폴더를 쓴다.
+    directoryOverride?: string | null,
 ): Promise<{ applied: number; title: string | null; cursor: { timeCreated: number; id: string } | null }> {
     let current = cursor;
     let applied = 0;
@@ -257,7 +259,7 @@ export async function downloadSession(
         }
         if (data.messages.length > 0) {
             const local = readSessionState(sessionId);
-            const directory = local?.directory ?? data.state?.directory ?? null;
+            const directory = directoryOverride ?? local?.directory ?? data.state?.directory ?? null;
             const pkg: TabPackage = {
                 tabId: sessionId,
                 exportedAt: Date.now(),

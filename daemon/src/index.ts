@@ -338,9 +338,29 @@ async function onLink(arg?: string): Promise<void> {
         }
         sessionId = shares[picked[0]].sessionId;
     }
+    // 처음 받는 탭이면 프로젝트 폴더를 정한다. 이미 있으면 그 폴더를 유지한다.
+    let directory: string | null = null;
+    if (!sessionExists(sessionId)) {
+        const remoteDir = shares.find((item) => item.sessionId === sessionId)?.directory ?? null;
+        if (remoteDir && isDir(remoteDir)) {
+            directory = remoteDir;
+            console.log(`using folder from the other PC: ${remoteDir}`);
+        } else {
+            const picked = await pickDirectory(remoteDir && isDir(remoteDir) ? remoteDir : null);
+            if (!picked || !isDir(picked)) {
+                console.log("no folder selected. nothing was linked.");
+                return;
+            }
+            directory = picked;
+        }
+    }
     await linkSession(sessionId);
-    const result = await downloadSession(sessionId, null, 1_000, (done, total) =>
-        putCount(`linking ${sessionId.slice(0, 12)}`, done, total),
+    const result = await downloadSession(
+        sessionId,
+        null,
+        1_000,
+        (done, total) => putCount(`linking ${sessionId.slice(0, 12)}`, done, total),
+        directory,
     );
     process.stdout.write("\n");
     console.log(`linked ${sessionId.slice(0, 12)} — applied ${result.applied} messages.`);
